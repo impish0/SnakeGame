@@ -15,10 +15,11 @@ app.use(express.json());
 app.get('/health', (_req, res) => res.json({ ok: true }));
 
 // Runtime config for client to discover API base at runtime
-app.get('/config.json', (_req, res) => {
+app.get('/config.json', (req, res) => {
     const publicApiUrl = process.env.PUBLIC_API_URL || '';
+    const fallback = `${req.protocol}://${req.get('host')}`;
     res.setHeader('Content-Type', 'application/json');
-    res.send(JSON.stringify({ apiBaseUrl: publicApiUrl }));
+    res.send(JSON.stringify({ apiBaseUrl: publicApiUrl || fallback }));
 });
 
 // Create or fetch user
