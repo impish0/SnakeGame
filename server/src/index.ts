@@ -3,6 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { PrismaClient } from '@prisma/client';
 import path from 'path';
+import fs from 'fs';
 
 dotenv.config();
 
@@ -12,6 +13,13 @@ app.use(cors());
 app.use(express.json());
 
 app.get('/health', (_req, res) => res.json({ ok: true }));
+
+// Runtime config for client to discover API base at runtime
+app.get('/config.json', (_req, res) => {
+    const publicApiUrl = process.env.PUBLIC_API_URL || '';
+    res.setHeader('Content-Type', 'application/json');
+    res.send(JSON.stringify({ apiBaseUrl: publicApiUrl }));
+});
 
 // Create or fetch user
 app.post('/api/users', async (req, res) => {
@@ -102,6 +110,12 @@ app.get('/api/leaderboard', async (req, res) => {
 try {
 	const clientDist = path.resolve(__dirname, '../../client/dist');
 	app.use(express.static(clientDist));
+	// Serve disk config if present (overrides env-based config above)
+	const diskConfig = path.join(clientDist, 'config.json');
+	app.get('/config.json', (req, res, next) => {
+		if (fs.existsSync(diskConfig)) return res.sendFile(diskConfig);
+		return next();
+	});
 	app.get('*', (req, res) => {
 		if (req.path.startsWith('/api')) {
 			return res.status(404).json({ error: 'not_found' });

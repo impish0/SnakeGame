@@ -18,7 +18,13 @@ const SNAKE_TYPES: { id: SnakeType; label: string }[] = [
 
 const PALETTE = ['#39ff14', '#ff1aff', '#00eaff', '#ffe600', '#ff6b6b', '#7c3aed']
 
-const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:4000'
+const API_BASE =
+  // runtime config from /config.json if present
+  (typeof window !== 'undefined' && (window as any).__SNAKE_CONFIG__?.apiBaseUrl) ||
+  // explicit env override when provided
+  (import.meta.env.VITE_API_URL as string | undefined) ||
+  // dev default
+  (import.meta.env.DEV ? 'http://localhost:4000' : '')
 
 export default function App() {
 	const [username, setUsername] = useState('')
@@ -72,16 +78,27 @@ export default function App() {
 	}, [gameState])
 
 	const startGame = async () => {
-		if (!username.trim()) return
-		const created = await fetch(`${API_BASE}/api/users`, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ username: username.trim(), snakeColor, snakeType }),
-		}).then(r => r.json())
-		setUser(created)
-		try { localStorage.setItem('snakeUser', JSON.stringify(created)) } catch {}
-		setScore(0)
-		setGameState('playing')
+		const name = username.trim()
+		if (!name) {
+			alert('Please enter a username to start.')
+			return
+		}
+		try {
+			const res = await fetch(`${API_BASE}/api/users`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ username: name, snakeColor, snakeType }),
+			})
+			if (!res.ok) throw new Error(`API error ${res.status}`)
+			const created = await res.json()
+			setUser(created)
+			try { localStorage.setItem('snakeUser', JSON.stringify(created)) } catch {}
+			setScore(0)
+			setGameState('playing')
+		} catch (err) {
+			console.error('Failed to start game', err)
+			alert('Unable to start game. Check server is reachable and try again.')
+		}
 	}
 
 	return (
