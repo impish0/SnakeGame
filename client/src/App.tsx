@@ -18,13 +18,13 @@ const SNAKE_TYPES: { id: SnakeType; label: string }[] = [
 
 const PALETTE = ['#39ff14', '#ff1aff', '#00eaff', '#ffe600', '#ff6b6b', '#7c3aed']
 
-const API_BASE =
-  // runtime config from /config.json if present
-  (typeof window !== 'undefined' && (window as any).__SNAKE_CONFIG__?.apiBaseUrl) ||
-  // explicit env override when provided
-  (import.meta.env.VITE_API_URL as string | undefined) ||
-  // dev default
-  (import.meta.env.DEV ? 'http://localhost:4000' : '')
+function getApiBase() {
+  const runtime = (typeof window !== 'undefined' && (window as any).__SNAKE_CONFIG__?.apiBaseUrl) as string | undefined
+  const envBase = (import.meta.env.VITE_API_URL as string | undefined)
+  const devDefault = import.meta.env.DEV ? 'http://localhost:4000' : ''
+  const base = runtime || envBase || devDefault || ''
+  return base.endsWith('/') ? base.slice(0, -1) : base
+}
 
 export default function App() {
 	const [username, setUsername] = useState('')
@@ -38,7 +38,8 @@ export default function App() {
 	const [isTouch, setIsTouch] = useState(false)
 
 	useEffect(() => {
-		void fetch(`${API_BASE}/health`).catch(() => {})
+		const base = getApiBase()
+		void fetch(`${base}/health`).catch(() => {})
 		try {
 			const last = localStorage.getItem('snakeUser')
 			if (last) {
@@ -50,7 +51,7 @@ export default function App() {
 			}
 		} catch {}
 		// initial leaderboard
-		fetch(`${API_BASE}/api/leaderboard?limit=10`).then(r => r.json()).then(setLeaderboard).catch(() => {})
+		fetch(`${base}/api/leaderboard?limit=10`).then(r => r.json()).then(setLeaderboard).catch(() => {})
 		// detect touch device
 		const detectTouch = () => setIsTouch((navigator as any).maxTouchPoints > 0 || window.matchMedia('(pointer: coarse)').matches)
 		detectTouch()
@@ -61,12 +62,13 @@ export default function App() {
 	useEffect(() => {
 		if (gameState !== 'gameover') return
 		if (!user) return
-		void fetch(`${API_BASE}/api/scores`, {
+		const base = getApiBase()
+		void fetch(`${base}/api/scores`, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify({ userId: user.id, value: score }),
 		})
-			.then(() => fetch(`${API_BASE}/api/leaderboard?limit=10`))
+			.then(() => fetch(`${base}/api/leaderboard?limit=10`))
 			.then(r => r.json())
 			.then(setLeaderboard)
 			.catch(() => {})
@@ -74,7 +76,8 @@ export default function App() {
 
 	useEffect(() => {
 		if (gameState !== 'menu') return
-		fetch(`${API_BASE}/api/leaderboard?limit=10`).then(r => r.json()).then(setLeaderboard).catch(() => {})
+		const base = getApiBase()
+		fetch(`${base}/api/leaderboard?limit=10`).then(r => r.json()).then(setLeaderboard).catch(() => {})
 	}, [gameState])
 
 	const startGame = async () => {
@@ -84,7 +87,8 @@ export default function App() {
 			return
 		}
 		try {
-			const res = await fetch(`${API_BASE}/api/users`, {
+			const base = getApiBase()
+			const res = await fetch(`${base}/api/users`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ username: name, snakeColor, snakeType }),
