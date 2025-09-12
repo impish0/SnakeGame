@@ -29,6 +29,7 @@ export default function App() {
 	const [score, setScore] = useState(0)
 	const [leaderboard, setLeaderboard] = useState<Array<{ id: string; value: number; createdAt: string; user: { id: string; username: string; snakeColor: string; snakeType: SnakeType } }>>([])
 	const [endKey, setEndKey] = useState(0)
+	const [isTouch, setIsTouch] = useState(false)
 
 	useEffect(() => {
 		void fetch(`${API_BASE}/health`).catch(() => {})
@@ -44,6 +45,11 @@ export default function App() {
 		} catch {}
 		// initial leaderboard
 		fetch(`${API_BASE}/api/leaderboard?limit=10`).then(r => r.json()).then(setLeaderboard).catch(() => {})
+		// detect touch device
+		const detectTouch = () => setIsTouch((navigator as any).maxTouchPoints > 0 || window.matchMedia('(pointer: coarse)').matches)
+		detectTouch()
+		window.addEventListener('resize', detectTouch)
+		return () => window.removeEventListener('resize', detectTouch)
 	}, [])
 
 	useEffect(() => {
@@ -156,17 +162,19 @@ export default function App() {
 							<button className="px-3 py-1 rounded border border-white/10 bg-white/10 hover:bg-white/20" onClick={() => setEndKey(k => k + 1)}>End Game</button>
 						</div>
 						<GameCanvas color={snakeColor} type={snakeType} onEnd={(finalScore) => { setScore(finalScore); setGameState('gameover'); }} endKey={endKey} />
-						<div className="fixed bottom-6 right-6 grid grid-cols-3 grid-rows-3 gap-2 select-none md:hidden">
-							<div />
-							<button className="w-12 h-12 rounded bg-white/10 border border-white/20" onClick={() => window.dispatchEvent(new CustomEvent('snake-dir', { detail: { x: 0, y: -1 } }))}>▲</button>
-							<div />
-							<button className="w-12 h-12 rounded bg-white/10 border border-white/20" onClick={() => window.dispatchEvent(new CustomEvent('snake-dir', { detail: { x: -1, y: 0 } }))}>◀</button>
-							<div className="w-12 h-12" />
-							<button className="w-12 h-12 rounded bg-white/10 border border-white/20" onClick={() => window.dispatchEvent(new CustomEvent('snake-dir', { detail: { x: 1, y: 0 } }))}>▶</button>
-							<div />
-							<button className="w-12 h-12 rounded bg-white/10 border border-white/20" onClick={() => window.dispatchEvent(new CustomEvent('snake-dir', { detail: { x: 0, y: 1 } }))}>▼</button>
-							<div />
-						</div>
+						{isTouch && (
+							<div className="fixed bottom-6 right-6 grid grid-cols-3 grid-rows-3 gap-2 select-none">
+								<div />
+								<button className="w-12 h-12 rounded bg-white/10 border border-white/20" onClick={() => window.dispatchEvent(new CustomEvent('snake-dir', { detail: { x: 0, y: -1 } }))}>▲</button>
+								<div />
+								<button className="w-12 h-12 rounded bg-white/10 border border-white/20" onClick={() => window.dispatchEvent(new CustomEvent('snake-dir', { detail: { x: -1, y: 0 } }))}>◀</button>
+								<div className="w-12 h-12" />
+								<button className="w-12 h-12 rounded bg-white/10 border border-white/20" onClick={() => window.dispatchEvent(new CustomEvent('snake-dir', { detail: { x: 1, y: 0 } }))}>▶</button>
+								<div />
+								<button className="w-12 h-12 rounded bg-white/10 border border-white/20" onClick={() => window.dispatchEvent(new CustomEvent('snake-dir', { detail: { x: 0, y: 1 } }))}>▼</button>
+								<div />
+							</div>
+						)}
 					</>
 				)}
 
@@ -312,9 +320,10 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 			// AI for bots: random turns sometimes
 			next = next.map(s => {
 				if (s.isPlayer || !s.alive) return s
-				if (Math.random() < 0.2) {
+				if (Math.random() < 0.1) {
 					const dirs = [ { x: 1, y: 0 }, { x: -1, y: 0 }, { x: 0, y: 1 }, { x: 0, y: -1 } ]
-					s.dir = dirs[Math.floor(Math.random() * dirs.length)]
+					const filtered = dirs.filter(d => !(d.x === -s.dir.x && d.y === -s.dir.y))
+					s.dir = filtered[Math.floor(Math.random() * filtered.length)]
 				}
 				return s
 			})
@@ -333,9 +342,10 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 				return s
 			})
 
-			// Self-collision kills a snake
+			// Self-collision kills only the player (bots ignore to reduce randomness)
 			next = next.map(s => {
 				if (!s.alive) return s
+				if (!s.isPlayer) return s
 				const head = s.body[0]
 				const hitSelf = s.body.slice(1).some(p => p.x === head.x && p.y === head.y)
 				return hitSelf ? { ...s, alive: false } : s
