@@ -7,9 +7,14 @@
     "dev:server": "npm --prefix server run dev",
     "dev:client": "npm --prefix client run dev",
     "build": "npm --prefix client run build && npm --prefix server run build",
-    "start": "npm --prefix server run start:migrate"
+    "start": "npm --prefix server run start:migrate",
+    "postinstall": "npm --prefix server run prisma:generate"
   },
   "devDependencies": {
     "concurrently": "^9.0.0"
+  },
+  "engines": {
+    "node": ">=18",
+    "npm": ">=9"
   }
 }
