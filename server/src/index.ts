@@ -5,7 +5,7 @@ import { PrismaClient } from '@prisma/client';
 import path from 'path';
 import fs from 'fs';
 
-dotenv.config();
+dotenv.config({ path: path.resolve(__dirname, '../.env') });
 
 const prisma = new PrismaClient();
 const app = express();
