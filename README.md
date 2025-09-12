@@ -46,7 +46,49 @@ npm run build
 npm start
 ```
 
-The server will serve the compiled client at `http://localhost:4000` and expose APIs under `/api/*`.
+The server serves the compiled client and exposes APIs under `/api/*`.
+
+### Runtime configuration (no rebuilds needed)
+- The client reads runtime config from `/config.json`.
+- The server returns `{ apiBaseUrl }` where:
+  - If `PUBLIC_API_URL` is set (env or `server/.env`), it uses that
+  - Otherwise it falls back to the current request origin (same‑origin)
+
+This means you can change the API URL without rebuilding the client. If you serve the client from the server (`npm start` at repo root), leaving `PUBLIC_API_URL` unset is fine; clients will use same‑origin.
+
+### PM2 (keep server running)
+Use an ecosystem file to pin env consistently:
+
+```js
+// ecosystem.config.js
+module.exports = {
+  apps: [{
+    name: 'snake-server',
+    script: 'npm',
+    args: 'start',
+    cwd: '/home/administrator/SnakeGame',
+    env: {
+      NODE_ENV: 'production',
+      // Optional: override API base. If omitted, client uses same-origin.
+      PUBLIC_API_URL: 'http://<server-ip>:4000'
+    }
+  }]
+}
+```
+
+Then run:
+
+```bash
+pm2 start ecosystem.config.js --only snake-server
+pm2 save
+```
+
+To verify runtime config:
+
+```bash
+curl http://<server-ip>:4000/config.json
+# -> {"apiBaseUrl":"http://<server-ip>:4000"}
+```
 
 ### API quick reference
 - **GET** `/health` → `{ ok: true }`
@@ -103,5 +145,15 @@ npm run -w server prisma:generate
 ```bash
 npm run -w server prisma:migrate
 ```
+
+- To access the dev client from other devices, run with a public host and set the API base explicitly:
+
+```bash
+VITE_API_URL=http://<server-ip>:4000 npm run dev:client -- --host
+```
+
+### Security and configuration
+- No hard‑coded external IPs or secrets are present in the codebase.
+- API base is configured via `PUBLIC_API_URL` or defaults to same‑origin at runtime.
 
 
