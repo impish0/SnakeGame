@@ -1,0 +1,29 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id          String   @id @default(cuid())
+  username    String   @unique
+  snakeColor  String   @default("#39ff14")
+  snakeType   String   @default("classic")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  scores      Score[]
+}
+
+model Score {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  value     Int
+  createdAt DateTime @default(now())
+}

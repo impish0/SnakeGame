@@ -1,0 +1,11 @@
+@import "tailwindcss";
+
+@theme {
+  --font-display: ui-sans-serif, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  --color-neon-green: #39ff14;
+  --color-neon-pink: #ff1aff;
+  --color-neon-blue: #00eaff;
+  --color-neon-yellow: #ffe600;
+}
+
+html, body, #root { height: 100%; }
