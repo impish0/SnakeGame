@@ -9,7 +9,27 @@ dotenv.config({ path: path.resolve(__dirname, '../.env') });
 
 const prisma = new PrismaClient();
 const app = express();
-app.use(cors());
+
+// Configure CORS from env. If CORS_ORIGIN is set it may be either a single origin
+// or a comma-separated list of allowed origins. When unset the server currently
+// calls `cors()` with no options which enables permissive CORS (allows any
+// origin). In production you should set `CORS_ORIGIN` to restrict allowed
+// origins (or set '*' intentionally if you understand the implications).
+const rawCors = process.env.CORS_ORIGIN;
+if (rawCors && rawCors.trim() !== '') {
+	const origins = rawCors.split(',').map((s: string) => s.trim()).filter(Boolean);
+	if (origins.length === 1) {
+		app.use(cors({ origin: origins[0] }));
+	} else {
+		app.use(cors({ origin: (origin: string | undefined, cb: (err: Error | null, allow?: boolean) => void) => cb(null, origins.includes(origin || '')) }));
+	}
+} else {
+	// No CORS_ORIGIN provided: default to allowing same-origin requests only by
+	// not enabling a permissive wildcard. However some clients may request from
+	// other hosts during development; if you want to allow all origins, set
+	// CORS_ORIGIN="*" in the environment (not recommended for production).
+	app.use(cors());
+}
 app.use(express.json());
 
 app.get('/health', (_req, res) => res.json({ ok: true }));
@@ -95,7 +115,7 @@ app.get('/api/leaderboard', async (req, res) => {
 			take: limit,
 			include: { user: true },
 		});
-		return res.json(rows.map(r => ({
+		return res.json(rows.map((r: any) => ({
 			id: r.id,
 			value: r.value,
 			createdAt: r.createdAt,
