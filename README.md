@@ -46,7 +46,7 @@ npm run dev
 Keep it running (optional PM2)
 ```bash
 npm i -g pm2
-pm2 start npm --name snake-server -- run start:migrate --cwd ./server --time
+pm2 start ecosystem.config.js --only snake-server   # after copying the example below
 pm2 save && pm2 startup
 ```
 
@@ -56,5 +56,18 @@ API
 - PUT `/api/users/:id` → `{ snakeColor?, snakeType? }`
 - POST `/api/scores` → `{ userId, value }`
 - GET `/api/leaderboard?limit=10`
+
+PM2 example config
+- Copy the example and start with PM2 to avoid npm/workspace issues on reboot/resurrect.
+```bash
+cp ecosystem.config.js.example ecosystem.config.js
+pm2 start ecosystem.config.js --only snake-server
+pm2 save && pm2 startup
+```
+If you prefer a one-liner instead of the ecosystem file, use an ABSOLUTE cwd so resurrects work:
+```bash
+pm2 start npm --name snake-server -- run start:migrate \
+  --cwd /home/<user>/SnakeGame/server --time
+```
 
 

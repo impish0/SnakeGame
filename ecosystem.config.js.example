@@ -1,0 +1,29 @@
+// PM2 example config for SnakeGame
+// Usage:
+//   cp ecosystem.config.js.example ecosystem.config.js
+//   pm2 start ecosystem.config.js --only snake-server
+//   pm2 save && pm2 startup
+
+const path = require('path');
+
+module.exports = {
+  apps: [
+    {
+      name: 'snake-server',
+      // Resolve to an absolute path so resurrects work reliably
+      cwd: path.resolve(__dirname, 'server'),
+      // Run DB migrations then start the built server without invoking npm
+      script: 'bash',
+      args: ['-lc', 'npx prisma migrate deploy --schema prisma/schema.prisma && node dist/index.js'],
+
+      instances: 1,        // SQLite: keep a single writer
+      exec_mode: 'fork',
+      watch: false,
+      time: true,
+      env: {
+        NODE_ENV: 'production'
+        // PORT, CORS_ORIGIN, PUBLIC_API_URL, DATABASE_URL are read from server/.env
+      }
+    }
+  ]
+};
