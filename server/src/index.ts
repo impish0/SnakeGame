@@ -19,7 +19,12 @@ const rawCors = process.env.CORS_ORIGIN;
 if (rawCors && rawCors.trim() !== '') {
 	const origins = rawCors.split(',').map((s: string) => s.trim()).filter(Boolean);
 	if (origins.length === 1) {
+		if (origins[0] === '*') {
+			// Explicit wildcard
+			app.use(cors());
+		} else {
 		app.use(cors({ origin: origins[0] }));
+		}
 	} else {
 		app.use(cors({ origin: (origin: string | undefined, cb: (err: Error | null, allow?: boolean) => void) => cb(null, origins.includes(origin || '')) }));
 	}

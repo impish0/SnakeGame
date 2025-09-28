@@ -8,7 +8,8 @@
     "dev:client": "npm --prefix client run dev",
     "build": "npm --prefix client run build && npm --prefix server run build",
     "start": "npm --prefix server run start:migrate",
-    "postinstall": "npm --prefix server run prisma:generate"
+    "postinstall": "npm --prefix server run prisma:generate",
+    "db:deploy": "npx prisma migrate deploy --schema server/prisma/schema.prisma"
   },
   "devDependencies": {
     "concurrently": "^9.0.0"
