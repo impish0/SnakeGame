@@ -180,23 +180,12 @@ export default function App() {
 
 				{gameState === 'playing' && (
 					<>
-						<div className="mt-6 flex justify-end">
+						<div className="mt-6 flex items-center justify-between">
+							{isTouch && <span className="text-sm opacity-60">Touch and drag to guide your snake</span>}
+							{!isTouch && <span className="text-sm opacity-60">Use arrow keys to move</span>}
 							<button className="px-3 py-1 rounded border border-white/10 bg-white/10 hover:bg-white/20" onClick={() => setEndKey(k => k + 1)}>End Game</button>
 						</div>
 						<GameCanvas color={snakeColor} type={snakeType} onEnd={(finalScore) => { setScore(finalScore); setGameState('gameover'); }} endKey={endKey} />
-						{isTouch && (
-							<div className="fixed bottom-6 right-6 grid grid-cols-3 grid-rows-3 gap-2 select-none">
-								<div />
-								<button className="w-12 h-12 rounded bg-white/10 border border-white/20" onClick={() => window.dispatchEvent(new CustomEvent('snake-dir', { detail: { x: 0, y: -1 } }))}>▲</button>
-								<div />
-								<button className="w-12 h-12 rounded bg-white/10 border border-white/20" onClick={() => window.dispatchEvent(new CustomEvent('snake-dir', { detail: { x: -1, y: 0 } }))}>◀</button>
-								<div className="w-12 h-12" />
-								<button className="w-12 h-12 rounded bg-white/10 border border-white/20" onClick={() => window.dispatchEvent(new CustomEvent('snake-dir', { detail: { x: 1, y: 0 } }))}>▶</button>
-								<div />
-								<button className="w-12 h-12 rounded bg-white/10 border border-white/20" onClick={() => window.dispatchEvent(new CustomEvent('snake-dir', { detail: { x: 0, y: 1 } }))}>▼</button>
-								<div />
-							</div>
-						)}
 					</>
 				)}
 
@@ -301,7 +290,9 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 		return [initialPlayer, enemy]
 	})
 
-	const [food, setFood] = useState<Point>({ x: 16, y: 12 })
+	const FOOD_COUNT = 5
+	const createFood = (): Point => ({ x: Math.floor(Math.random() * cols), y: Math.floor(Math.random() * rows) })
+	const [foods, setFoods] = useState<Point[]>(() => Array.from({ length: FOOD_COUNT }, createFood))
 
 	const lastEndKeyRef = useRef<number | undefined>(endKey)
 	useEffect(() => {
@@ -313,29 +304,49 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 		}
 	}, [endKey, onEnd])
 
-	// Touch: swipe detection on canvas
+	// Touch: finger-following control - snake moves toward finger position
+	const touchTargetRef = useRef<{ x: number; y: number } | null>(null)
+	const [touchTarget, setTouchTarget] = useState<{ x: number; y: number } | null>(null)
+
 	useEffect(() => {
 		const canvas = canvasRef.current
 		if (!canvas) return
-		let startX = 0, startY = 0
-		const start = (e: TouchEvent) => { const t = e.touches[0]; startX = t.clientX; startY = t.clientY }
-		const move = (e: TouchEvent) => {
-			if (e.changedTouches.length === 0) return
-			const t = e.changedTouches[0]
-			const dx = t.clientX - startX
-			const dy = t.clientY - startY
-			if (Math.abs(dx) < 24 && Math.abs(dy) < 24) return
-			if (Math.abs(dx) > Math.abs(dy)) {
-				window.dispatchEvent(new CustomEvent('snake-dir', { detail: { x: dx > 0 ? 1 : -1, y: 0 } }))
-			} else {
-				window.dispatchEvent(new CustomEvent('snake-dir', { detail: { x: 0, y: dy > 0 ? 1 : -1 } }))
-			}
-			startX = t.clientX; startY = t.clientY
+
+		const getGridPos = (clientX: number, clientY: number) => {
+			const rect = canvas.getBoundingClientRect()
+			const scaleX = canvas.width / rect.width
+			const scaleY = canvas.height / rect.height
+			const x = Math.floor(((clientX - rect.left) * scaleX) / gridSize)
+			const y = Math.floor(((clientY - rect.top) * scaleY) / gridSize)
+			return { x: Math.max(0, Math.min(cols - 1, x)), y: Math.max(0, Math.min(rows - 1, y)) }
 		}
-		canvas.addEventListener('touchstart', start, { passive: true })
-		canvas.addEventListener('touchmove', move, { passive: true })
-		return () => { canvas.removeEventListener('touchstart', start); canvas.removeEventListener('touchmove', move) }
-	}, [])
+
+		const handleTouch = (e: TouchEvent) => {
+			e.preventDefault() // Prevent scrolling on iPad
+			if (e.touches.length === 0) return
+			const t = e.touches[0]
+			const pos = getGridPos(t.clientX, t.clientY)
+			touchTargetRef.current = pos
+			setTouchTarget(pos)
+		}
+
+		const handleTouchEnd = () => {
+			touchTargetRef.current = null
+			setTouchTarget(null)
+		}
+
+		canvas.addEventListener('touchstart', handleTouch, { passive: false })
+		canvas.addEventListener('touchmove', handleTouch, { passive: false })
+		canvas.addEventListener('touchend', handleTouchEnd, { passive: true })
+		canvas.addEventListener('touchcancel', handleTouchEnd, { passive: true })
+
+		return () => {
+			canvas.removeEventListener('touchstart', handleTouch)
+			canvas.removeEventListener('touchmove', handleTouch)
+			canvas.removeEventListener('touchend', handleTouchEnd)
+			canvas.removeEventListener('touchcancel', handleTouchEnd)
+		}
+	}, [cols, rows, gridSize])
 
 	useEffect(() => {
 		const handler = (e: KeyboardEvent | CustomEvent) => {
@@ -373,8 +384,53 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 	useEffect(() => {
 		if (!running) return
 		setSnakes(prev => {
-			// Move snakes (enemies move slower based on size)
+			// Player touch control: steer toward finger position
 			let next = prev.map(s => {
+				if (!s.isPlayer || !s.alive) return s
+				const target = touchTargetRef.current
+				if (!target) return s
+
+				const head = s.body[0]
+				const dx = target.x - head.x
+				const dy = target.y - head.y
+
+				// Only change direction if finger is not on the snake head
+				if (dx === 0 && dy === 0) return s
+
+				const dirs = [ { x: 1, y: 0 }, { x: -1, y: 0 }, { x: 0, y: 1 }, { x: 0, y: -1 } ]
+				// Don't reverse direction (can't go backward)
+				const validDirs = dirs.filter(d => !(d.x === -s.dir.x && d.y === -s.dir.y))
+
+				// Choose direction that moves us closer to target
+				let bestDir = s.dir
+				if (Math.abs(dx) >= Math.abs(dy)) {
+					// Prioritize horizontal movement
+					const wantX = dx > 0 ? 1 : -1
+					const preferred = validDirs.find(d => d.x === wantX && d.y === 0)
+					if (preferred) bestDir = preferred
+					else if (dy !== 0) {
+						// Can't go horizontal, try vertical
+						const wantY = dy > 0 ? 1 : -1
+						const fallback = validDirs.find(d => d.y === wantY && d.x === 0)
+						if (fallback) bestDir = fallback
+					}
+				} else {
+					// Prioritize vertical movement
+					const wantY = dy > 0 ? 1 : -1
+					const preferred = validDirs.find(d => d.y === wantY && d.x === 0)
+					if (preferred) bestDir = preferred
+					else if (dx !== 0) {
+						// Can't go vertical, try horizontal
+						const wantX = dx > 0 ? 1 : -1
+						const fallback = validDirs.find(d => d.x === wantX && d.y === 0)
+						if (fallback) bestDir = fallback
+					}
+				}
+				return { ...s, dir: bestDir }
+			})
+
+			// Move snakes (enemies move slower based on size)
+			next = next.map(s => {
 				if (!s.alive) return s
 				// Enemies skip ticks based on their size
 				if (!s.isPlayer) {
@@ -394,10 +450,21 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 				// Don't reverse direction
 				const validDirs = dirs.filter(d => !(d.x === -s.dir.x && d.y === -s.dir.y))
 
-				// 70% chance to move toward food, 30% random
+				// 70% chance to move toward nearest food, 30% random
 				if (Math.random() < 0.7) {
-					const dx = food.x - head.x
-					const dy = food.y - head.y
+					// Find nearest food
+					let nearestFood = foods[0]
+					let nearestDist = Math.abs(foods[0].x - head.x) + Math.abs(foods[0].y - head.y)
+					for (const f of foods) {
+						const dist = Math.abs(f.x - head.x) + Math.abs(f.y - head.y)
+						if (dist < nearestDist) {
+							nearestDist = dist
+							nearestFood = f
+						}
+					}
+
+					const dx = nearestFood.x - head.x
+					const dy = nearestFood.y - head.y
 
 					// Prefer the direction that gets us closer to food
 					let bestDir = s.dir
@@ -421,21 +488,26 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 			})
 
 			// Eating food grows snakes (both player and enemies)
-			let foodEaten = false
+			const eatenFoodIndices: number[] = []
 			next = next.map(s => {
 				if (!s.alive) return s
-				if (s.body[0].x === food.x && s.body[0].y === food.y) {
-					const grown = { ...s, size: s.size + 1 }
+				const headX = s.body[0].x
+				const headY = s.body[0].y
+				const foodIndex = foods.findIndex(f => f.x === headX && f.y === headY)
+				if (foodIndex !== -1) {
+					eatenFoodIndices.push(foodIndex)
 					if (s.isPlayer) {
 						setScore(v => v + 10)
 					}
-					foodEaten = true
-					return grown
+					return { ...s, size: s.size + 1 }
 				}
 				return s
 			})
-			if (foodEaten) {
-				setFood({ x: Math.floor(Math.random() * cols), y: Math.floor(Math.random() * rows) })
+			if (eatenFoodIndices.length > 0) {
+				// Replace eaten food with new food
+				setFoods(prev => prev.map((f, i) =>
+					eatenFoodIndices.includes(i) ? createFood() : f
+				))
 			}
 
 			// Self-collision kills only the player (bots ignore to reduce randomness)
@@ -519,7 +591,7 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 			return next
 		})
 	// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [tick, running, food, cols, rows, onEnd])
+	}, [tick, running, foods, cols, rows, onEnd])
 
 	useEffect(() => {
 		const canvas = canvasRef.current
@@ -535,9 +607,11 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 			}
 		}
 
-		// draw food
+		// draw all food blocks
 		ctx.fillStyle = '#ffcc00'
-		ctx.fillRect(food.x * gridSize, food.y * gridSize, gridSize, gridSize)
+		for (const f of foods) {
+			ctx.fillRect(f.x * gridSize, f.y * gridSize, gridSize, gridSize)
+		}
 
 		// draw snakes with styles
 		snakes.forEach(s => {
@@ -565,11 +639,28 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 			ctx.globalAlpha = 1
 		})
 
+		// draw touch target indicator
+		if (touchTarget) {
+			ctx.strokeStyle = color
+			ctx.lineWidth = 2
+			ctx.globalAlpha = 0.6
+			ctx.beginPath()
+			ctx.arc(
+				touchTarget.x * gridSize + gridSize / 2,
+				touchTarget.y * gridSize + gridSize / 2,
+				gridSize / 2 + 4,
+				0,
+				Math.PI * 2
+			)
+			ctx.stroke()
+			ctx.globalAlpha = 1
+		}
+
 		// score HUD
 		ctx.fillStyle = 'white'
 		ctx.font = 'bold 16px sans-serif'
 		ctx.fillText(`Score: ${score}` , 10, 18)
-	}, [snakes, food, score, type, color])
+	}, [snakes, foods, score, type, color, touchTarget])
 
 	return (
 		<div className="mt-8">
