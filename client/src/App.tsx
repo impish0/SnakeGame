@@ -235,14 +235,23 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 	const canvasRef = useRef<HTMLCanvasElement | null>(null)
 	const [running, setRunning] = useState(true)
 	const [tick, setTick] = useState(0)
-	const [score, setScore] = useState(0)
-
+	const scoreRef = useRef(0)
+	const [score, setScoreState] = useState(0)
+	const setScore = (updater: number | ((prev: number) => number)) => {
+		setScoreState(prev => {
+			const next = typeof updater === 'function' ? updater(prev) : updater
+			scoreRef.current = next
+			return next
+		})
+	}
 	const gridSize = 20
 	const cols = 32
 	const rows = 24
 
 	type Point = { x: number; y: number }
-	type Snake = { body: Point[]; dir: Point; alive: boolean; color: string; isPlayer: boolean; size: number }
+	type Snake = { body: Point[]; dir: Point; alive: boolean; color: string; isPlayer: boolean; size: number; id: number }
+
+	const nextIdRef = useRef(1)
 
 	const initialPlayer: Snake = useMemo(() => ({
 		body: [ { x: 8, y: 12 } ],
@@ -251,18 +260,25 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 		color: color,
 		isPlayer: true,
 		size: 3,
+		id: 0,
 	}), [color])
 
-	const [snakes, setSnakes] = useState<Snake[]>(() => {
-		const bots: Snake[] = Array.from({ length: 3 }).map((_, i) => ({
-			body: [ { x: 20 + (i % 3), y: 10 + (i % 4) } ],
-			dir: { x: i % 2 === 0 ? -1 : 1, y: 0 },
+	const createEnemy = (index: number): Snake => {
+		const id = nextIdRef.current++
+		return {
+			body: [ { x: 20 + (index % 10), y: 10 + (index % 12) } ],
+			dir: { x: index % 2 === 0 ? -1 : 1, y: 0 },
 			alive: true,
-			color: ['#ff6b6b', '#7c3aed', '#00eaff', '#ffe600', '#ff1aff'][i % 5],
+			color: ['#ff6b6b', '#7c3aed', '#00eaff', '#ffe600', '#ff1aff'][index % 5],
 			isPlayer: false,
-			size: 2 + (i % 3),
-		}))
-		return [initialPlayer, ...bots]
+			size: 3,
+			id,
+		}
+	}
+
+	const [snakes, setSnakes] = useState<Snake[]>(() => {
+		// Start with 1 enemy
+		return [initialPlayer, createEnemy(0)]
 	})
 
 	const [food, setFood] = useState<Point>({ x: 16, y: 12 })
@@ -273,9 +289,9 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 		if (endKey !== lastEndKeyRef.current) {
 			lastEndKeyRef.current = endKey
 			setRunning(false)
-			setTimeout(() => onEnd(score), 100)
+			setTimeout(() => onEnd(scoreRef.current), 100)
 		}
-	}, [endKey])
+	}, [endKey, onEnd])
 
 	// Touch: swipe detection on canvas
 	useEffect(() => {
@@ -327,41 +343,58 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 		return () => clearInterval(id)
 	}, [])
 
+	// Calculate enemy speed based on size (slower when bigger)
+	const getEnemyTickInterval = (size: number) => {
+		// Base interval is 160ms, enemies skip ticks based on size
+		// Size 3 = move every tick, size 6 = move every 2 ticks, size 9 = every 3 ticks
+		return Math.max(1, Math.floor(size / 3))
+	}
+
 	useEffect(() => {
 		if (!running) return
 		setSnakes(prev => {
-			// Move snakes
+			// Move snakes (enemies move slower based on size)
 			let next = prev.map(s => {
 				if (!s.alive) return s
+				// Enemies skip ticks based on their size
+				if (!s.isPlayer) {
+					const interval = getEnemyTickInterval(s.size)
+					if (tick % interval !== 0) return s
+				}
 				const head = { x: (s.body[0].x + s.dir.x + cols) % cols, y: (s.body[0].y + s.dir.y + rows) % rows }
 				const newBody = [head, ...s.body].slice(0, s.size)
 				return { ...s, body: newBody }
 			})
 
-			// AI for bots: random turns sometimes
+			// AI for bots: random turns sometimes (BUG FIX: return new object instead of mutating)
 			next = next.map(s => {
 				if (s.isPlayer || !s.alive) return s
 				if (Math.random() < 0.1) {
 					const dirs = [ { x: 1, y: 0 }, { x: -1, y: 0 }, { x: 0, y: 1 }, { x: 0, y: -1 } ]
 					const filtered = dirs.filter(d => !(d.x === -s.dir.x && d.y === -s.dir.y))
-					s.dir = filtered[Math.floor(Math.random() * filtered.length)]
+					const newDir = filtered[Math.floor(Math.random() * filtered.length)]
+					return { ...s, dir: newDir }
 				}
 				return s
 			})
 
-			// Eating food grows player
+			// Eating food grows snakes (both player and enemies)
+			let foodEaten = false
 			next = next.map(s => {
 				if (!s.alive) return s
 				if (s.body[0].x === food.x && s.body[0].y === food.y) {
 					const grown = { ...s, size: s.size + 1 }
 					if (s.isPlayer) {
 						setScore(v => v + 10)
-						setFood({ x: Math.floor(Math.random() * cols), y: Math.floor(Math.random() * rows) })
 					}
+					foodEaten = true
 					return grown
 				}
 				return s
 			})
+			if (foodEaten) {
+				setFood({ x: Math.floor(Math.random() * cols), y: Math.floor(Math.random() * rows) })
+			}
 
 			// Self-collision kills only the player (bots ignore to reduce randomness)
 			next = next.map(s => {
@@ -372,39 +405,78 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 				return hitSelf ? { ...s, alive: false } : s
 			})
 
-			// Big snakes eat smaller snakes on head collision or overlap
+			// Player eating enemy: player bites off from the collision point backward
+			// Enemy can only die when fully consumed (size becomes 0)
 			for (let i = 0; i < next.length; i++) {
-				for (let j = i + 1; j < next.length; j++) {
-					const a = next[i]
-					const b = next[j]
-					if (!a.alive || !b.alive) continue
-					const ah = a.body[0]
-					const bh = b.body[0]
-					const headTouch = ah.x === bh.x && ah.y === bh.y
-					const overlap = a.body.some(p => p.x === bh.x && p.y === bh.y) || b.body.some(p => p.x === ah.x && p.y === ah.y)
-					if (headTouch || overlap) {
-						if (a.size === b.size) continue
-						if (a.size > b.size) {
-							next[j] = { ...b, alive: false }
-							if (a.isPlayer) setScore(s => s + 25)
+				const player = next[i]
+				if (!player.isPlayer || !player.alive) continue
+				const playerHead = player.body[0]
+
+				for (let j = 0; j < next.length; j++) {
+					if (i === j) continue
+					const enemy = next[j]
+					if (enemy.isPlayer || !enemy.alive) continue
+
+					// Check if player head touches any part of enemy body
+					const hitIndex = enemy.body.findIndex(p => p.x === playerHead.x && p.y === playerHead.y)
+					if (hitIndex !== -1) {
+						// Player bites from hitIndex backward (removes hitIndex and everything after)
+						const segmentsEaten = enemy.body.length - hitIndex
+						const newEnemyBody = enemy.body.slice(0, hitIndex)
+						const newEnemySize = enemy.size - segmentsEaten
+
+						if (newEnemySize <= 0 || newEnemyBody.length === 0) {
+							// Enemy fully consumed - dies
+							next[j] = { ...enemy, alive: false, body: [], size: 0 }
+							setScore(v => v + 50)
 						} else {
-							next[i] = { ...a, alive: false }
-							if (b.isPlayer) setScore(s => s + 25)
+							// Enemy partially eaten - shrinks
+							next[j] = { ...enemy, body: newEnemyBody, size: newEnemySize }
+							setScore(v => v + 5 * segmentsEaten)
 						}
 					}
 				}
 			}
 
+			// Enemy head hitting player kills player (enemy doesn't die from this)
+			for (let i = 0; i < next.length; i++) {
+				const enemy = next[i]
+				if (enemy.isPlayer || !enemy.alive) continue
+				const enemyHead = enemy.body[0]
+
+				for (let j = 0; j < next.length; j++) {
+					const player = next[j]
+					if (!player.isPlayer || !player.alive) continue
+
+					// Check if enemy head hits player body
+					const hitPlayer = player.body.some(p => p.x === enemyHead.x && p.y === enemyHead.y)
+					if (hitPlayer) {
+						next[j] = { ...player, alive: false }
+					}
+				}
+			}
+
+			// Spawn new enemies when one is killed (start with 1, spawn 2 when killed)
+			const deadEnemies = next.filter(s => !s.isPlayer && !s.alive)
+
+			if (deadEnemies.length > 0) {
+				// Remove dead enemies and spawn 2 new ones for each killed
+				next = next.filter(s => s.isPlayer || s.alive)
+				for (let i = 0; i < deadEnemies.length * 2; i++) {
+					next.push(createEnemy(nextIdRef.current))
+				}
+			}
+
 			// End if player dead
-			const player = next.find(s => s.isPlayer)
-			if (!player?.alive) {
+			const playerSnake = next.find(s => s.isPlayer)
+			if (!playerSnake?.alive) {
 				setRunning(false)
-				setTimeout(() => onEnd(score), 300)
+				setTimeout(() => onEnd(scoreRef.current), 300)
 			}
 
 			return next
 		})
-	}, [tick])
+	}, [tick, running, food, cols, rows, onEnd])
 
 	useEffect(() => {
 		const canvas = canvasRef.current
