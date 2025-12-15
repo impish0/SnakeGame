@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './index.css'
 
 type SnakeType = 'classic' | 'stripe' | 'neon';
@@ -10,6 +10,17 @@ type User = {
 	snakeType: SnakeType
 }
 
+// Game constants
+const GRID_SIZE = 20
+const COLS = 32
+const ROWS = 24
+const FOOD_COUNT = 5
+const MAX_ENEMIES = 10
+const ENEMY_AI_FOOD_CHASE_CHANCE = 0.7
+const SPAWN_SAFE_DISTANCE = 3
+const SPAWN_MAX_ATTEMPTS = 50
+const ENEMY_COLORS = ['#ff6b6b', '#7c3aed', '#00eaff', '#ffe600', '#ff1aff']
+
 const SNAKE_TYPES: { id: SnakeType; label: string }[] = [
 	{ id: 'classic', label: 'Classic' },
 	{ id: 'stripe', label: 'Stripe' },
@@ -19,7 +30,7 @@ const SNAKE_TYPES: { id: SnakeType; label: string }[] = [
 const PALETTE = ['#39ff14', '#ff1aff', '#00eaff', '#ffe600', '#ff6b6b', '#7c3aed']
 
 function getApiBase() {
-  const runtime = (typeof window !== 'undefined' && (window as any).__SNAKE_CONFIG__?.apiBaseUrl) as string | undefined
+  const runtime = (typeof window !== 'undefined' && (window as Window).__SNAKE_CONFIG__?.apiBaseUrl) as string | undefined
   const envBase = (import.meta.env.VITE_API_URL as string | undefined)
   const devDefault = import.meta.env.DEV ? 'http://localhost:4000' : ''
   const base = runtime || envBase || devDefault || ''
@@ -49,11 +60,11 @@ export default function App() {
 				setSnakeColor(parsed.snakeColor)
 				setSnakeType(parsed.snakeType)
 			}
-		} catch {}
+		} catch { /* ignore localStorage errors */ }
 		// initial leaderboard
-		fetch(`${base}/api/leaderboard?limit=10`).then(r => r.json()).then(setLeaderboard).catch(() => {})
+		fetch(`${base}/api/leaderboard?limit=10`).then(r => r.json()).then(setLeaderboard).catch(() => { /* ignore */ })
 		// detect touch device
-		const detectTouch = () => setIsTouch((navigator as any).maxTouchPoints > 0 || window.matchMedia('(pointer: coarse)').matches)
+		const detectTouch = () => setIsTouch(navigator.maxTouchPoints > 0 || window.matchMedia('(pointer: coarse)').matches)
 		detectTouch()
 		window.addEventListener('resize', detectTouch)
 		return () => window.removeEventListener('resize', detectTouch)
@@ -71,13 +82,13 @@ export default function App() {
 			.then(() => fetch(`${base}/api/leaderboard?limit=10`))
 			.then(r => r.json())
 			.then(setLeaderboard)
-			.catch(() => {})
-	}, [gameState])
+			.catch(() => { /* ignore */ })
+	}, [gameState, user, score])
 
 	useEffect(() => {
 		if (gameState !== 'menu') return
 		const base = getApiBase()
-		fetch(`${base}/api/leaderboard?limit=10`).then(r => r.json()).then(setLeaderboard).catch(() => {})
+		fetch(`${base}/api/leaderboard?limit=10`).then(r => r.json()).then(setLeaderboard).catch(() => { /* ignore */ })
 	}, [gameState])
 
 	const startGame = async () => {
@@ -96,7 +107,7 @@ export default function App() {
 			if (!res.ok) throw new Error(`API error ${res.status}`)
 			const created = await res.json()
 			setUser(created)
-			try { localStorage.setItem('snakeUser', JSON.stringify(created)) } catch {}
+			try { localStorage.setItem('snakeUser', JSON.stringify(created)) } catch { /* ignore */ }
 			setScore(0)
 			setGameState('playing')
 		} catch (err) {
@@ -179,23 +190,12 @@ export default function App() {
 
 				{gameState === 'playing' && (
 					<>
-						<div className="mt-6 flex justify-end">
+						<div className="mt-6 flex items-center justify-between">
+							{isTouch && <span className="text-sm opacity-60">Touch and drag to guide your snake</span>}
+							{!isTouch && <span className="text-sm opacity-60">Use arrow keys to move</span>}
 							<button className="px-3 py-1 rounded border border-white/10 bg-white/10 hover:bg-white/20" onClick={() => setEndKey(k => k + 1)}>End Game</button>
 						</div>
 						<GameCanvas color={snakeColor} type={snakeType} onEnd={(finalScore) => { setScore(finalScore); setGameState('gameover'); }} endKey={endKey} />
-						{isTouch && (
-							<div className="fixed bottom-6 right-6 grid grid-cols-3 grid-rows-3 gap-2 select-none">
-								<div />
-								<button className="w-12 h-12 rounded bg-white/10 border border-white/20" onClick={() => window.dispatchEvent(new CustomEvent('snake-dir', { detail: { x: 0, y: -1 } }))}>▲</button>
-								<div />
-								<button className="w-12 h-12 rounded bg-white/10 border border-white/20" onClick={() => window.dispatchEvent(new CustomEvent('snake-dir', { detail: { x: -1, y: 0 } }))}>◀</button>
-								<div className="w-12 h-12" />
-								<button className="w-12 h-12 rounded bg-white/10 border border-white/20" onClick={() => window.dispatchEvent(new CustomEvent('snake-dir', { detail: { x: 1, y: 0 } }))}>▶</button>
-								<div />
-								<button className="w-12 h-12 rounded bg-white/10 border border-white/20" onClick={() => window.dispatchEvent(new CustomEvent('snake-dir', { detail: { x: 0, y: 1 } }))}>▼</button>
-								<div />
-							</div>
-						)}
 					</>
 				)}
 
@@ -231,18 +231,24 @@ export default function App() {
 	)
 }
 
+type Point = { x: number; y: number }
+type Snake = { body: Point[]; dir: Point; alive: boolean; color: string; isPlayer: boolean; size: number; id: number }
+
 function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: SnakeType; onEnd: (score: number) => void; endKey?: number }) {
 	const canvasRef = useRef<HTMLCanvasElement | null>(null)
 	const [running, setRunning] = useState(true)
 	const [tick, setTick] = useState(0)
-	const [score, setScore] = useState(0)
+	const scoreRef = useRef(0)
+	const [score, setScoreState] = useState(0)
+	const setScore = useCallback((updater: number | ((prev: number) => number)) => {
+		setScoreState(prev => {
+			const next = typeof updater === 'function' ? updater(prev) : updater
+			scoreRef.current = next
+			return next
+		})
+	}, [])
 
-	const gridSize = 20
-	const cols = 32
-	const rows = 24
-
-	type Point = { x: number; y: number }
-	type Snake = { body: Point[]; dir: Point; alive: boolean; color: string; isPlayer: boolean; size: number }
+	const nextIdRef = useRef(1)
 
 	const initialPlayer: Snake = useMemo(() => ({
 		body: [ { x: 8, y: 12 } ],
@@ -251,21 +257,94 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 		color: color,
 		isPlayer: true,
 		size: 3,
+		id: 0,
 	}), [color])
 
-	const [snakes, setSnakes] = useState<Snake[]>(() => {
-		const bots: Snake[] = Array.from({ length: 3 }).map((_, i) => ({
-			body: [ { x: 20 + (i % 3), y: 10 + (i % 4) } ],
-			dir: { x: i % 2 === 0 ? -1 : 1, y: 0 },
+	// Create food at random position, avoiding snakes and existing food
+	const createFood = useCallback((snakeBodies: Point[], existingFoods: Point[]): Point => {
+		let attempts = 0
+		let x: number
+		let y: number
+		do {
+			x = Math.floor(Math.random() * COLS)
+			y = Math.floor(Math.random() * ROWS)
+			attempts++
+		} while (
+			attempts < SPAWN_MAX_ATTEMPTS &&
+			(snakeBodies.some(p => p.x === x && p.y === y) ||
+			 existingFoods.some(f => f.x === x && f.y === y))
+		)
+		return { x, y }
+	}, [])
+
+	const createEnemy = useCallback((index: number, playerBody?: Point[]): Snake => {
+		const id = nextIdRef.current++
+		// Spawn at random position away from player
+		let spawnX: number
+		let spawnY: number
+		let attempts = 0
+		do {
+			spawnX = Math.floor(Math.random() * COLS)
+			spawnY = Math.floor(Math.random() * ROWS)
+			attempts++
+		} while (
+			attempts < SPAWN_MAX_ATTEMPTS &&
+			playerBody &&
+			playerBody.some(p => Math.abs(p.x - spawnX) <= SPAWN_SAFE_DISTANCE && Math.abs(p.y - spawnY) <= SPAWN_SAFE_DISTANCE)
+		)
+		return {
+			body: [ { x: spawnX, y: spawnY } ],
+			dir: { x: index % 2 === 0 ? -1 : 1, y: 0 },
 			alive: true,
-			color: ['#ff6b6b', '#7c3aed', '#00eaff', '#ffe600', '#ff1aff'][i % 5],
+			color: ENEMY_COLORS[index % ENEMY_COLORS.length],
 			isPlayer: false,
-			size: 2 + (i % 3),
-		}))
-		return [initialPlayer, ...bots]
+			size: 3,
+			id,
+		}
+	}, [])
+
+	// Use a ref to track if we've initialized to prevent double-init in Strict Mode
+	const initializedRef = useRef(false)
+	const [snakes, setSnakes] = useState<Snake[]>(() => {
+		// Only create initial enemy once
+		if (initializedRef.current) {
+			return [initialPlayer]
+		}
+		initializedRef.current = true
+		// Start with exactly 1 enemy
+		const enemy: Snake = {
+			body: [ { x: 22, y: 10 } ],
+			dir: { x: -1, y: 0 },
+			alive: true,
+			color: ENEMY_COLORS[0],
+			isPlayer: false,
+			size: 3,
+			id: nextIdRef.current++,
+		}
+		return [initialPlayer, enemy]
 	})
 
-	const [food, setFood] = useState<Point>({ x: 16, y: 12 })
+	// Initialize foods avoiding initial snake positions
+	const [foods, setFoods] = useState<Point[]>(() => {
+		const initialSnakeBodies = [{ x: 8, y: 12 }, { x: 22, y: 10 }]
+		const initialFoods: Point[] = []
+		for (let i = 0; i < FOOD_COUNT; i++) {
+			let x: number
+			let y: number
+			let attempts = 0
+			do {
+				x = Math.floor(Math.random() * COLS)
+				y = Math.floor(Math.random() * ROWS)
+				attempts++
+			} while (
+				attempts < SPAWN_MAX_ATTEMPTS &&
+				(initialSnakeBodies.some(p => p.x === x && p.y === y) ||
+				 initialFoods.some(f => f.x === x && f.y === y))
+			)
+			initialFoods.push({ x, y })
+		}
+		return initialFoods
+	})
 
 	const lastEndKeyRef = useRef<number | undefined>(endKey)
 	useEffect(() => {
@@ -273,53 +352,75 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 		if (endKey !== lastEndKeyRef.current) {
 			lastEndKeyRef.current = endKey
 			setRunning(false)
-			setTimeout(() => onEnd(score), 100)
+			setTimeout(() => onEnd(scoreRef.current), 100)
 		}
-	}, [endKey])
+	}, [endKey, onEnd])
 
-	// Touch: swipe detection on canvas
+	// Touch: finger-following control - snake moves toward finger position
+	const touchTargetRef = useRef<{ x: number; y: number } | null>(null)
+	const [touchTarget, setTouchTarget] = useState<{ x: number; y: number } | null>(null)
+
 	useEffect(() => {
 		const canvas = canvasRef.current
 		if (!canvas) return
-		let startX = 0, startY = 0
-		const start = (e: TouchEvent) => { const t = e.touches[0]; startX = t.clientX; startY = t.clientY }
-		const move = (e: TouchEvent) => {
-			if (e.changedTouches.length === 0) return
-			const t = e.changedTouches[0]
-			const dx = t.clientX - startX
-			const dy = t.clientY - startY
-			if (Math.abs(dx) < 24 && Math.abs(dy) < 24) return
-			if (Math.abs(dx) > Math.abs(dy)) {
-				window.dispatchEvent(new CustomEvent('snake-dir', { detail: { x: dx > 0 ? 1 : -1, y: 0 } }))
-			} else {
-				window.dispatchEvent(new CustomEvent('snake-dir', { detail: { x: 0, y: dy > 0 ? 1 : -1 } }))
-			}
-			startX = t.clientX; startY = t.clientY
+
+		const getGridPos = (clientX: number, clientY: number) => {
+			const rect = canvas.getBoundingClientRect()
+			const scaleX = canvas.width / rect.width
+			const scaleY = canvas.height / rect.height
+			const x = Math.floor(((clientX - rect.left) * scaleX) / GRID_SIZE)
+			const y = Math.floor(((clientY - rect.top) * scaleY) / GRID_SIZE)
+			return { x: Math.max(0, Math.min(COLS - 1, x)), y: Math.max(0, Math.min(ROWS - 1, y)) }
 		}
-		canvas.addEventListener('touchstart', start, { passive: true })
-		canvas.addEventListener('touchmove', move, { passive: true })
-		return () => { canvas.removeEventListener('touchstart', start); canvas.removeEventListener('touchmove', move) }
+
+		const handleTouch = (e: TouchEvent) => {
+			e.preventDefault() // Prevent scrolling on iPad
+			if (e.touches.length === 0) return
+			const t = e.touches[0]
+			const pos = getGridPos(t.clientX, t.clientY)
+			touchTargetRef.current = pos
+			setTouchTarget(pos)
+		}
+
+		const handleTouchEnd = () => {
+			touchTargetRef.current = null
+			setTouchTarget(null)
+		}
+
+		canvas.addEventListener('touchstart', handleTouch, { passive: false })
+		canvas.addEventListener('touchmove', handleTouch, { passive: false })
+		canvas.addEventListener('touchend', handleTouchEnd, { passive: true })
+		canvas.addEventListener('touchcancel', handleTouchEnd, { passive: true })
+
+		return () => {
+			canvas.removeEventListener('touchstart', handleTouch)
+			canvas.removeEventListener('touchmove', handleTouch)
+			canvas.removeEventListener('touchend', handleTouchEnd)
+			canvas.removeEventListener('touchcancel', handleTouchEnd)
+		}
 	}, [])
 
 	useEffect(() => {
 		const handler = (e: KeyboardEvent | CustomEvent) => {
 			if (!running) return
+			// Helper to check if new direction is opposite of current (would reverse)
+			const isReverse = (current: Point, next: Point) => current.x === -next.x && current.y === -next.y
 			// Keyboard
 			if (e instanceof KeyboardEvent) {
-				if (e.key === 'ArrowUp') setSnakes(prev => prev.map(s => s.isPlayer ? { ...s, dir: { x: 0, y: -1 } } : s))
-				if (e.key === 'ArrowDown') setSnakes(prev => prev.map(s => s.isPlayer ? { ...s, dir: { x: 0, y: 1 } } : s))
-				if (e.key === 'ArrowLeft') setSnakes(prev => prev.map(s => s.isPlayer ? { ...s, dir: { x: -1, y: 0 } } : s))
-				if (e.key === 'ArrowRight') setSnakes(prev => prev.map(s => s.isPlayer ? { ...s, dir: { x: 1, y: 0 } } : s))
+				if (e.key === 'ArrowUp') setSnakes(prev => prev.map(s => s.isPlayer && !isReverse(s.dir, { x: 0, y: -1 }) ? { ...s, dir: { x: 0, y: -1 } } : s))
+				if (e.key === 'ArrowDown') setSnakes(prev => prev.map(s => s.isPlayer && !isReverse(s.dir, { x: 0, y: 1 }) ? { ...s, dir: { x: 0, y: 1 } } : s))
+				if (e.key === 'ArrowLeft') setSnakes(prev => prev.map(s => s.isPlayer && !isReverse(s.dir, { x: -1, y: 0 }) ? { ...s, dir: { x: -1, y: 0 } } : s))
+				if (e.key === 'ArrowRight') setSnakes(prev => prev.map(s => s.isPlayer && !isReverse(s.dir, { x: 1, y: 0 }) ? { ...s, dir: { x: 1, y: 0 } } : s))
 			} else {
-				const detail: any = (e as CustomEvent).detail
+				const detail = (e as CustomEvent<{ x: number; y: number }>).detail
 				if (detail && typeof detail.x === 'number' && typeof detail.y === 'number') {
-					setSnakes(prev => prev.map(s => s.isPlayer ? { ...s, dir: { x: detail.x, y: detail.y } } : s))
+					setSnakes(prev => prev.map(s => s.isPlayer && !isReverse(s.dir, detail) ? { ...s, dir: { x: detail.x, y: detail.y } } : s))
 				}
 			}
 		}
-		window.addEventListener('keydown', handler as any)
-		window.addEventListener('snake-dir', handler as any)
-		return () => { window.removeEventListener('keydown', handler as any); window.removeEventListener('snake-dir', handler as any) }
+		window.addEventListener('keydown', handler as EventListener)
+		window.addEventListener('snake-dir', handler as EventListener)
+		return () => { window.removeEventListener('keydown', handler as EventListener); window.removeEventListener('snake-dir', handler as EventListener) }
 	}, [running])
 
 	useEffect(() => {
@@ -327,41 +428,147 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 		return () => clearInterval(id)
 	}, [])
 
+	// Calculate enemy speed based on size (slower when bigger)
+	const getEnemyTickInterval = (size: number) => {
+		// Base interval is 160ms, enemies skip ticks based on size
+		// Size 3 = move every tick, size 6 = move every 2 ticks, size 9 = every 3 ticks
+		return Math.max(1, Math.floor(size / 3))
+	}
+
 	useEffect(() => {
 		if (!running) return
 		setSnakes(prev => {
-			// Move snakes
+			// Player touch control: steer toward finger position
 			let next = prev.map(s => {
+				if (!s.isPlayer || !s.alive) return s
+				const target = touchTargetRef.current
+				if (!target) return s
+
+				const head = s.body[0]
+				const dx = target.x - head.x
+				const dy = target.y - head.y
+
+				// Only change direction if finger is not on the snake head
+				if (dx === 0 && dy === 0) return s
+
+				const dirs = [ { x: 1, y: 0 }, { x: -1, y: 0 }, { x: 0, y: 1 }, { x: 0, y: -1 } ]
+				// Don't reverse direction (can't go backward)
+				const validDirs = dirs.filter(d => !(d.x === -s.dir.x && d.y === -s.dir.y))
+
+				// Choose direction that moves us closer to target
+				let bestDir = s.dir
+				if (Math.abs(dx) >= Math.abs(dy)) {
+					// Prioritize horizontal movement
+					const wantX = dx > 0 ? 1 : -1
+					const preferred = validDirs.find(d => d.x === wantX && d.y === 0)
+					if (preferred) bestDir = preferred
+					else if (dy !== 0) {
+						// Can't go horizontal, try vertical
+						const wantY = dy > 0 ? 1 : -1
+						const fallback = validDirs.find(d => d.y === wantY && d.x === 0)
+						if (fallback) bestDir = fallback
+					}
+				} else {
+					// Prioritize vertical movement
+					const wantY = dy > 0 ? 1 : -1
+					const preferred = validDirs.find(d => d.y === wantY && d.x === 0)
+					if (preferred) bestDir = preferred
+					else if (dx !== 0) {
+						// Can't go vertical, try horizontal
+						const wantX = dx > 0 ? 1 : -1
+						const fallback = validDirs.find(d => d.x === wantX && d.y === 0)
+						if (fallback) bestDir = fallback
+					}
+				}
+				return { ...s, dir: bestDir }
+			})
+
+			// Move snakes (enemies move slower based on size)
+			next = next.map(s => {
 				if (!s.alive) return s
-				const head = { x: (s.body[0].x + s.dir.x + cols) % cols, y: (s.body[0].y + s.dir.y + rows) % rows }
+				// Enemies skip ticks based on their size
+				if (!s.isPlayer) {
+					const interval = getEnemyTickInterval(s.size)
+					if (tick % interval !== 0) return s
+				}
+				const head = { x: (s.body[0].x + s.dir.x + COLS) % COLS, y: (s.body[0].y + s.dir.y + ROWS) % ROWS }
 				const newBody = [head, ...s.body].slice(0, s.size)
 				return { ...s, body: newBody }
 			})
 
-			// AI for bots: random turns sometimes
+			// AI for bots: move toward food most of the time, occasionally random
 			next = next.map(s => {
 				if (s.isPlayer || !s.alive) return s
-				if (Math.random() < 0.1) {
-					const dirs = [ { x: 1, y: 0 }, { x: -1, y: 0 }, { x: 0, y: 1 }, { x: 0, y: -1 } ]
-					const filtered = dirs.filter(d => !(d.x === -s.dir.x && d.y === -s.dir.y))
-					s.dir = filtered[Math.floor(Math.random() * filtered.length)]
+				const head = s.body[0]
+				const dirs = [ { x: 1, y: 0 }, { x: -1, y: 0 }, { x: 0, y: 1 }, { x: 0, y: -1 } ]
+				// Don't reverse direction
+				const validDirs = dirs.filter(d => !(d.x === -s.dir.x && d.y === -s.dir.y))
+
+				// 70% chance to move toward nearest food, 30% random
+				if (Math.random() < ENEMY_AI_FOOD_CHASE_CHANCE) {
+					// Find nearest food
+					let nearestFood = foods[0]
+					let nearestDist = Math.abs(foods[0].x - head.x) + Math.abs(foods[0].y - head.y)
+					for (const f of foods) {
+						const dist = Math.abs(f.x - head.x) + Math.abs(f.y - head.y)
+						if (dist < nearestDist) {
+							nearestDist = dist
+							nearestFood = f
+						}
+					}
+
+					const dx = nearestFood.x - head.x
+					const dy = nearestFood.y - head.y
+
+					// Prefer the direction that gets us closer to food
+					let bestDir = s.dir
+					if (Math.abs(dx) > Math.abs(dy)) {
+						// Move horizontally toward food
+						const wantX = dx > 0 ? 1 : -1
+						const preferred = validDirs.find(d => d.x === wantX && d.y === 0)
+						if (preferred) bestDir = preferred
+					} else if (dy !== 0) {
+						// Move vertically toward food
+						const wantY = dy > 0 ? 1 : -1
+						const preferred = validDirs.find(d => d.y === wantY && d.x === 0)
+						if (preferred) bestDir = preferred
+					}
+					return { ...s, dir: bestDir }
+				} else {
+					// Random direction
+					const newDir = validDirs[Math.floor(Math.random() * validDirs.length)]
+					return { ...s, dir: newDir }
 				}
-				return s
 			})
 
-			// Eating food grows player
+			// Eating food grows snakes (both player and enemies)
+			const eatenFoodIndices: number[] = []
 			next = next.map(s => {
 				if (!s.alive) return s
-				if (s.body[0].x === food.x && s.body[0].y === food.y) {
-					const grown = { ...s, size: s.size + 1 }
+				const headX = s.body[0].x
+				const headY = s.body[0].y
+				const foodIndex = foods.findIndex(f => f.x === headX && f.y === headY)
+				if (foodIndex !== -1) {
+					eatenFoodIndices.push(foodIndex)
 					if (s.isPlayer) {
 						setScore(v => v + 10)
-						setFood({ x: Math.floor(Math.random() * cols), y: Math.floor(Math.random() * rows) })
 					}
-					return grown
+					return { ...s, size: s.size + 1 }
 				}
 				return s
 			})
+			if (eatenFoodIndices.length > 0) {
+				// Replace eaten food with new food, avoiding snake bodies
+				const allBodies = next.flatMap(s => s.body)
+				setFoods(prev => {
+					const newFoods = [...prev]
+					for (const idx of eatenFoodIndices) {
+						const otherFoods = newFoods.filter((_, i) => i !== idx)
+						newFoods[idx] = createFood(allBodies, otherFoods)
+					}
+					return newFoods
+				})
+			}
 
 			// Self-collision kills only the player (bots ignore to reduce randomness)
 			next = next.map(s => {
@@ -372,39 +579,106 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 				return hitSelf ? { ...s, alive: false } : s
 			})
 
-			// Big snakes eat smaller snakes on head collision or overlap
+			// Player eating enemy: player bites off from the collision point backward
+			// Enemy can only die when fully consumed (size becomes 0)
+			// Build collision updates without mutating
+			const playerEatingUpdates: Map<number, Snake> = new Map()
+			let scoreFromEating = 0
 			for (let i = 0; i < next.length; i++) {
-				for (let j = i + 1; j < next.length; j++) {
-					const a = next[i]
-					const b = next[j]
-					if (!a.alive || !b.alive) continue
-					const ah = a.body[0]
-					const bh = b.body[0]
-					const headTouch = ah.x === bh.x && ah.y === bh.y
-					const overlap = a.body.some(p => p.x === bh.x && p.y === bh.y) || b.body.some(p => p.x === ah.x && p.y === ah.y)
-					if (headTouch || overlap) {
-						if (a.size === b.size) continue
-						if (a.size > b.size) {
-							next[j] = { ...b, alive: false }
-							if (a.isPlayer) setScore(s => s + 25)
+				const player = next[i]
+				if (!player.isPlayer || !player.alive) continue
+				const playerHead = player.body[0]
+
+				for (let j = 0; j < next.length; j++) {
+					if (i === j) continue
+					const enemy = playerEatingUpdates.get(j) ?? next[j]
+					if (enemy.isPlayer || !enemy.alive) continue
+
+					// Check if player head touches any part of enemy body
+					const hitIndex = enemy.body.findIndex(p => p.x === playerHead.x && p.y === playerHead.y)
+					if (hitIndex !== -1) {
+						// Player bites from hitIndex backward (removes hitIndex and everything after)
+						const segmentsEaten = enemy.body.length - hitIndex
+						const newEnemyBody = enemy.body.slice(0, hitIndex)
+						const newEnemySize = enemy.size - segmentsEaten
+
+						if (newEnemySize <= 0 || newEnemyBody.length === 0) {
+							// Enemy fully consumed - dies
+							playerEatingUpdates.set(j, { ...enemy, alive: false, body: [], size: 0 })
+							scoreFromEating += 50
 						} else {
-							next[i] = { ...a, alive: false }
-							if (b.isPlayer) setScore(s => s + 25)
+							// Enemy partially eaten - shrinks
+							playerEatingUpdates.set(j, { ...enemy, body: newEnemyBody, size: newEnemySize })
+							scoreFromEating += 5 * segmentsEaten
 						}
 					}
 				}
 			}
+			// Apply player eating updates
+			if (playerEatingUpdates.size > 0) {
+				next = next.map((s, i) => playerEatingUpdates.get(i) ?? s)
+				setScore(v => v + scoreFromEating)
+			}
+
+			// Enemy head hitting player kills player (enemy doesn't die from this)
+			// But only if the enemy still has a head (wasn't just eaten)
+			const enemyHitUpdates: Map<number, Snake> = new Map()
+			for (let i = 0; i < next.length; i++) {
+				const enemy = next[i]
+				if (enemy.isPlayer || !enemy.alive) continue
+				// Skip if enemy has no body (was fully eaten)
+				if (enemy.body.length === 0) continue
+				const enemyHead = enemy.body[0]
+
+				for (let j = 0; j < next.length; j++) {
+					const player = next[j]
+					if (!player.isPlayer || !player.alive) continue
+
+					// Check if enemy head hits player body (excluding head-to-head which player wins)
+					const hitPlayer = player.body.some((p, idx) => {
+						if (p.x === enemyHead.x && p.y === enemyHead.y) {
+							// Head-to-head collision: player wins (they eat the enemy)
+							if (idx === 0) return false
+							return true
+						}
+						return false
+					})
+					if (hitPlayer) {
+						enemyHitUpdates.set(j, { ...player, alive: false })
+					}
+				}
+			}
+			// Apply enemy hit updates
+			if (enemyHitUpdates.size > 0) {
+				next = next.map((s, i) => enemyHitUpdates.get(i) ?? s)
+			}
+
+			// Spawn new enemies when one is killed (start with 1, spawn 2 when killed)
+			// But cap total enemies at MAX_ENEMIES
+			const deadEnemies = next.filter(s => !s.isPlayer && !s.alive)
+
+			if (deadEnemies.length > 0) {
+				// Remove dead enemies and spawn 2 new ones for each killed (up to cap)
+				next = next.filter(s => s.isPlayer || s.alive)
+				const currentEnemyCount = next.filter(s => !s.isPlayer).length
+				const playerSnakeForSpawn = next.find(s => s.isPlayer)
+				const playerBody = playerSnakeForSpawn?.body ?? []
+				const enemiesToSpawn = Math.min(deadEnemies.length * 2, MAX_ENEMIES - currentEnemyCount)
+				for (let i = 0; i < enemiesToSpawn; i++) {
+					next.push(createEnemy(nextIdRef.current, playerBody))
+				}
+			}
 
 			// End if player dead
-			const player = next.find(s => s.isPlayer)
-			if (!player?.alive) {
+			const playerSnake = next.find(s => s.isPlayer)
+			if (!playerSnake?.alive) {
 				setRunning(false)
-				setTimeout(() => onEnd(score), 300)
+				setTimeout(() => onEnd(scoreRef.current), 300)
 			}
 
 			return next
 		})
-	}, [tick])
+	}, [tick, running, foods, onEnd, setScore, createFood, createEnemy])
 
 	useEffect(() => {
 		const canvas = canvasRef.current
@@ -412,25 +686,27 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 		const ctx = canvas.getContext('2d')!
 		ctx.clearRect(0, 0, canvas.width, canvas.height)
 		ctx.fillStyle = 'rgba(255,255,255,0.04)'
-		for (let x = 0; x < cols; x++) {
-			for (let y = 0; y < rows; y++) {
+		for (let x = 0; x < COLS; x++) {
+			for (let y = 0; y < ROWS; y++) {
 				if ((x + y) % 2 === 0) {
-					ctx.fillRect(x * gridSize, y * gridSize, gridSize, gridSize)
+					ctx.fillRect(x * GRID_SIZE, y * GRID_SIZE, GRID_SIZE, GRID_SIZE)
 				}
 			}
 		}
 
-		// draw food
+		// draw all food blocks
 		ctx.fillStyle = '#ffcc00'
-		ctx.fillRect(food.x * gridSize, food.y * gridSize, gridSize, gridSize)
+		for (const f of foods) {
+			ctx.fillRect(f.x * GRID_SIZE, f.y * GRID_SIZE, GRID_SIZE, GRID_SIZE)
+		}
 
 		// draw snakes with styles
 		snakes.forEach(s => {
 			ctx.globalAlpha = s.alive ? 1 : 0.3
 			s.body.forEach((p, idx) => {
-				const size = gridSize - Math.max(0, idx - 1)
-				const x = p.x * gridSize + (gridSize - size) / 2
-				const y = p.y * gridSize + (gridSize - size) / 2
+				const size = GRID_SIZE - Math.max(0, idx - 1)
+				const x = p.x * GRID_SIZE + (GRID_SIZE - size) / 2
+				const y = p.y * GRID_SIZE + (GRID_SIZE - size) / 2
 				if (type === 'neon' && s.isPlayer) {
 					ctx.shadowBlur = 16
 					ctx.shadowColor = color
@@ -450,15 +726,32 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 			ctx.globalAlpha = 1
 		})
 
+		// draw touch target indicator
+		if (touchTarget) {
+			ctx.strokeStyle = color
+			ctx.lineWidth = 2
+			ctx.globalAlpha = 0.6
+			ctx.beginPath()
+			ctx.arc(
+				touchTarget.x * GRID_SIZE + GRID_SIZE / 2,
+				touchTarget.y * GRID_SIZE + GRID_SIZE / 2,
+				GRID_SIZE / 2 + 4,
+				0,
+				Math.PI * 2
+			)
+			ctx.stroke()
+			ctx.globalAlpha = 1
+		}
+
 		// score HUD
 		ctx.fillStyle = 'white'
 		ctx.font = 'bold 16px sans-serif'
 		ctx.fillText(`Score: ${score}` , 10, 18)
-	}, [snakes, food, score, type, color])
+	}, [snakes, foods, score, type, color, touchTarget])
 
 	return (
 		<div className="mt-8">
-			<canvas ref={canvasRef} width={cols * gridSize} height={rows * gridSize} className="rounded-xl border border-white/10 bg-black/40 w-full h-auto max-w-full" />
+			<canvas ref={canvasRef} width={COLS * GRID_SIZE} height={ROWS * GRID_SIZE} className="rounded-xl border border-white/10 bg-black/40 w-full h-auto max-w-full" />
 		</div>
 	)
 }

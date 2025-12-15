@@ -13,7 +13,7 @@ async function bootstrap() {
       const cfg = await res.json()
       window.__SNAKE_CONFIG__ = cfg
     }
-  } catch {}
+  } catch { /* ignore config fetch errors */ }
   createRoot(document.getElementById('root')!).render(
     <App />
   )
