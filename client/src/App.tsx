@@ -253,11 +253,22 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 		id: 0,
 	}), [color])
 
-	const createEnemy = (index: number): Snake => {
+	const createEnemy = (index: number, playerBody?: Point[]): Snake => {
 		const id = nextIdRef.current++
-		// Spawn at random position away from player start (8, 12)
-		const spawnX = 16 + Math.floor(Math.random() * 12)
-		const spawnY = 4 + Math.floor(Math.random() * 16)
+		// Spawn at random position away from player
+		let spawnX: number
+		let spawnY: number
+		let attempts = 0
+		do {
+			spawnX = Math.floor(Math.random() * cols)
+			spawnY = Math.floor(Math.random() * rows)
+			attempts++
+			// Safety: limit attempts to prevent infinite loop
+		} while (
+			attempts < 50 &&
+			playerBody &&
+			playerBody.some(p => Math.abs(p.x - spawnX) <= 3 && Math.abs(p.y - spawnY) <= 3)
+		)
 		return {
 			body: [ { x: spawnX, y: spawnY } ],
 			dir: { x: index % 2 === 0 ? -1 : 1, y: 0 },
@@ -553,17 +564,27 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 			}
 
 			// Enemy head hitting player kills player (enemy doesn't die from this)
+			// But only if the enemy still has a head (wasn't just eaten)
 			for (let i = 0; i < next.length; i++) {
 				const enemy = next[i]
 				if (enemy.isPlayer || !enemy.alive) continue
+				// Skip if enemy has no body (was fully eaten)
+				if (enemy.body.length === 0) continue
 				const enemyHead = enemy.body[0]
 
 				for (let j = 0; j < next.length; j++) {
 					const player = next[j]
 					if (!player.isPlayer || !player.alive) continue
 
-					// Check if enemy head hits player body
-					const hitPlayer = player.body.some(p => p.x === enemyHead.x && p.y === enemyHead.y)
+					// Check if enemy head hits player body (excluding head-to-head which player wins)
+					const hitPlayer = player.body.some((p, idx) => {
+						if (p.x === enemyHead.x && p.y === enemyHead.y) {
+							// Head-to-head collision: player wins (they eat the enemy)
+							if (idx === 0) return false
+							return true
+						}
+						return false
+					})
 					if (hitPlayer) {
 						next[j] = { ...player, alive: false }
 					}
@@ -576,8 +597,10 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 			if (deadEnemies.length > 0) {
 				// Remove dead enemies and spawn 2 new ones for each killed
 				next = next.filter(s => s.isPlayer || s.alive)
+				const playerSnakeForSpawn = next.find(s => s.isPlayer)
+				const playerBody = playerSnakeForSpawn?.body ?? []
 				for (let i = 0; i < deadEnemies.length * 2; i++) {
-					next.push(createEnemy(nextIdRef.current))
+					next.push(createEnemy(nextIdRef.current, playerBody))
 				}
 			}
 
