@@ -9,7 +9,9 @@
     "build": "npm --prefix client run build && npm --prefix server run build",
     "start": "npm --prefix server run start:migrate",
     "postinstall": "npm --prefix server run prisma:generate",
-    "db:deploy": "npx prisma migrate deploy --schema server/prisma/schema.prisma"
+    "db:deploy": "npx prisma migrate deploy --schema server/prisma/schema.prisma",
+    "lint": "npm --prefix client run lint",
+    "typecheck": "npm --prefix client run typecheck"
   },
   "devDependencies": {
     "concurrently": "^9.0.0"

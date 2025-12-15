@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './index.css'
 
 type SnakeType = 'classic' | 'stripe' | 'neon';
@@ -9,6 +9,17 @@ type User = {
 	snakeColor: string
 	snakeType: SnakeType
 }
+
+// Game constants
+const GRID_SIZE = 20
+const COLS = 32
+const ROWS = 24
+const FOOD_COUNT = 5
+const MAX_ENEMIES = 10
+const ENEMY_AI_FOOD_CHASE_CHANCE = 0.7
+const SPAWN_SAFE_DISTANCE = 3
+const SPAWN_MAX_ATTEMPTS = 50
+const ENEMY_COLORS = ['#ff6b6b', '#7c3aed', '#00eaff', '#ffe600', '#ff1aff']
 
 const SNAKE_TYPES: { id: SnakeType; label: string }[] = [
 	{ id: 'classic', label: 'Classic' },
@@ -71,9 +82,8 @@ export default function App() {
 			.then(() => fetch(`${base}/api/leaderboard?limit=10`))
 			.then(r => r.json())
 			.then(setLeaderboard)
-			.catch(() => {})
-	// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [gameState])
+			.catch(() => { /* ignore */ })
+	}, [gameState, user, score])
 
 	useEffect(() => {
 		if (gameState !== 'menu') return
@@ -221,25 +231,22 @@ export default function App() {
 	)
 }
 
+type Point = { x: number; y: number }
+type Snake = { body: Point[]; dir: Point; alive: boolean; color: string; isPlayer: boolean; size: number; id: number }
+
 function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: SnakeType; onEnd: (score: number) => void; endKey?: number }) {
 	const canvasRef = useRef<HTMLCanvasElement | null>(null)
 	const [running, setRunning] = useState(true)
 	const [tick, setTick] = useState(0)
 	const scoreRef = useRef(0)
 	const [score, setScoreState] = useState(0)
-	const setScore = (updater: number | ((prev: number) => number)) => {
+	const setScore = useCallback((updater: number | ((prev: number) => number)) => {
 		setScoreState(prev => {
 			const next = typeof updater === 'function' ? updater(prev) : updater
 			scoreRef.current = next
 			return next
 		})
-	}
-	const gridSize = 20
-	const cols = 32
-	const rows = 24
-
-	type Point = { x: number; y: number }
-	type Snake = { body: Point[]; dir: Point; alive: boolean; color: string; isPlayer: boolean; size: number; id: number }
+	}, [])
 
 	const nextIdRef = useRef(1)
 
@@ -253,32 +260,48 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 		id: 0,
 	}), [color])
 
-	const createEnemy = (index: number, playerBody?: Point[]): Snake => {
+	// Create food at random position, avoiding snakes and existing food
+	const createFood = useCallback((snakeBodies: Point[], existingFoods: Point[]): Point => {
+		let attempts = 0
+		let x: number
+		let y: number
+		do {
+			x = Math.floor(Math.random() * COLS)
+			y = Math.floor(Math.random() * ROWS)
+			attempts++
+		} while (
+			attempts < SPAWN_MAX_ATTEMPTS &&
+			(snakeBodies.some(p => p.x === x && p.y === y) ||
+			 existingFoods.some(f => f.x === x && f.y === y))
+		)
+		return { x, y }
+	}, [])
+
+	const createEnemy = useCallback((index: number, playerBody?: Point[]): Snake => {
 		const id = nextIdRef.current++
 		// Spawn at random position away from player
 		let spawnX: number
 		let spawnY: number
 		let attempts = 0
 		do {
-			spawnX = Math.floor(Math.random() * cols)
-			spawnY = Math.floor(Math.random() * rows)
+			spawnX = Math.floor(Math.random() * COLS)
+			spawnY = Math.floor(Math.random() * ROWS)
 			attempts++
-			// Safety: limit attempts to prevent infinite loop
 		} while (
-			attempts < 50 &&
+			attempts < SPAWN_MAX_ATTEMPTS &&
 			playerBody &&
-			playerBody.some(p => Math.abs(p.x - spawnX) <= 3 && Math.abs(p.y - spawnY) <= 3)
+			playerBody.some(p => Math.abs(p.x - spawnX) <= SPAWN_SAFE_DISTANCE && Math.abs(p.y - spawnY) <= SPAWN_SAFE_DISTANCE)
 		)
 		return {
 			body: [ { x: spawnX, y: spawnY } ],
 			dir: { x: index % 2 === 0 ? -1 : 1, y: 0 },
 			alive: true,
-			color: ['#ff6b6b', '#7c3aed', '#00eaff', '#ffe600', '#ff1aff'][index % 5],
+			color: ENEMY_COLORS[index % ENEMY_COLORS.length],
 			isPlayer: false,
 			size: 3,
 			id,
 		}
-	}
+	}, [])
 
 	// Use a ref to track if we've initialized to prevent double-init in Strict Mode
 	const initializedRef = useRef(false)
@@ -293,7 +316,7 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 			body: [ { x: 22, y: 10 } ],
 			dir: { x: -1, y: 0 },
 			alive: true,
-			color: '#ff6b6b',
+			color: ENEMY_COLORS[0],
 			isPlayer: false,
 			size: 3,
 			id: nextIdRef.current++,
@@ -301,9 +324,27 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 		return [initialPlayer, enemy]
 	})
 
-	const FOOD_COUNT = 5
-	const createFood = (): Point => ({ x: Math.floor(Math.random() * cols), y: Math.floor(Math.random() * rows) })
-	const [foods, setFoods] = useState<Point[]>(() => Array.from({ length: FOOD_COUNT }, createFood))
+	// Initialize foods avoiding initial snake positions
+	const [foods, setFoods] = useState<Point[]>(() => {
+		const initialSnakeBodies = [{ x: 8, y: 12 }, { x: 22, y: 10 }]
+		const initialFoods: Point[] = []
+		for (let i = 0; i < FOOD_COUNT; i++) {
+			let x: number
+			let y: number
+			let attempts = 0
+			do {
+				x = Math.floor(Math.random() * COLS)
+				y = Math.floor(Math.random() * ROWS)
+				attempts++
+			} while (
+				attempts < SPAWN_MAX_ATTEMPTS &&
+				(initialSnakeBodies.some(p => p.x === x && p.y === y) ||
+				 initialFoods.some(f => f.x === x && f.y === y))
+			)
+			initialFoods.push({ x, y })
+		}
+		return initialFoods
+	})
 
 	const lastEndKeyRef = useRef<number | undefined>(endKey)
 	useEffect(() => {
@@ -327,9 +368,9 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 			const rect = canvas.getBoundingClientRect()
 			const scaleX = canvas.width / rect.width
 			const scaleY = canvas.height / rect.height
-			const x = Math.floor(((clientX - rect.left) * scaleX) / gridSize)
-			const y = Math.floor(((clientY - rect.top) * scaleY) / gridSize)
-			return { x: Math.max(0, Math.min(cols - 1, x)), y: Math.max(0, Math.min(rows - 1, y)) }
+			const x = Math.floor(((clientX - rect.left) * scaleX) / GRID_SIZE)
+			const y = Math.floor(((clientY - rect.top) * scaleY) / GRID_SIZE)
+			return { x: Math.max(0, Math.min(COLS - 1, x)), y: Math.max(0, Math.min(ROWS - 1, y)) }
 		}
 
 		const handleTouch = (e: TouchEvent) => {
@@ -357,7 +398,7 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 			canvas.removeEventListener('touchend', handleTouchEnd)
 			canvas.removeEventListener('touchcancel', handleTouchEnd)
 		}
-	}, [cols, rows, gridSize])
+	}, [])
 
 	useEffect(() => {
 		const handler = (e: KeyboardEvent | CustomEvent) => {
@@ -448,7 +489,7 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 					const interval = getEnemyTickInterval(s.size)
 					if (tick % interval !== 0) return s
 				}
-				const head = { x: (s.body[0].x + s.dir.x + cols) % cols, y: (s.body[0].y + s.dir.y + rows) % rows }
+				const head = { x: (s.body[0].x + s.dir.x + COLS) % COLS, y: (s.body[0].y + s.dir.y + ROWS) % ROWS }
 				const newBody = [head, ...s.body].slice(0, s.size)
 				return { ...s, body: newBody }
 			})
@@ -462,7 +503,7 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 				const validDirs = dirs.filter(d => !(d.x === -s.dir.x && d.y === -s.dir.y))
 
 				// 70% chance to move toward nearest food, 30% random
-				if (Math.random() < 0.7) {
+				if (Math.random() < ENEMY_AI_FOOD_CHASE_CHANCE) {
 					// Find nearest food
 					let nearestFood = foods[0]
 					let nearestDist = Math.abs(foods[0].x - head.x) + Math.abs(foods[0].y - head.y)
@@ -515,10 +556,16 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 				return s
 			})
 			if (eatenFoodIndices.length > 0) {
-				// Replace eaten food with new food
-				setFoods(prev => prev.map((f, i) =>
-					eatenFoodIndices.includes(i) ? createFood() : f
-				))
+				// Replace eaten food with new food, avoiding snake bodies
+				const allBodies = next.flatMap(s => s.body)
+				setFoods(prev => {
+					const newFoods = [...prev]
+					for (const idx of eatenFoodIndices) {
+						const otherFoods = newFoods.filter((_, i) => i !== idx)
+						newFoods[idx] = createFood(allBodies, otherFoods)
+					}
+					return newFoods
+				})
 			}
 
 			// Self-collision kills only the player (bots ignore to reduce randomness)
@@ -532,6 +579,9 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 
 			// Player eating enemy: player bites off from the collision point backward
 			// Enemy can only die when fully consumed (size becomes 0)
+			// Build collision updates without mutating
+			const playerEatingUpdates: Map<number, Snake> = new Map()
+			let scoreFromEating = 0
 			for (let i = 0; i < next.length; i++) {
 				const player = next[i]
 				if (!player.isPlayer || !player.alive) continue
@@ -539,7 +589,7 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 
 				for (let j = 0; j < next.length; j++) {
 					if (i === j) continue
-					const enemy = next[j]
+					const enemy = playerEatingUpdates.get(j) ?? next[j]
 					if (enemy.isPlayer || !enemy.alive) continue
 
 					// Check if player head touches any part of enemy body
@@ -552,19 +602,25 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 
 						if (newEnemySize <= 0 || newEnemyBody.length === 0) {
 							// Enemy fully consumed - dies
-							next[j] = { ...enemy, alive: false, body: [], size: 0 }
-							setScore(v => v + 50)
+							playerEatingUpdates.set(j, { ...enemy, alive: false, body: [], size: 0 })
+							scoreFromEating += 50
 						} else {
 							// Enemy partially eaten - shrinks
-							next[j] = { ...enemy, body: newEnemyBody, size: newEnemySize }
-							setScore(v => v + 5 * segmentsEaten)
+							playerEatingUpdates.set(j, { ...enemy, body: newEnemyBody, size: newEnemySize })
+							scoreFromEating += 5 * segmentsEaten
 						}
 					}
 				}
 			}
+			// Apply player eating updates
+			if (playerEatingUpdates.size > 0) {
+				next = next.map((s, i) => playerEatingUpdates.get(i) ?? s)
+				setScore(v => v + scoreFromEating)
+			}
 
 			// Enemy head hitting player kills player (enemy doesn't die from this)
 			// But only if the enemy still has a head (wasn't just eaten)
+			const enemyHitUpdates: Map<number, Snake> = new Map()
 			for (let i = 0; i < next.length; i++) {
 				const enemy = next[i]
 				if (enemy.isPlayer || !enemy.alive) continue
@@ -586,20 +642,27 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 						return false
 					})
 					if (hitPlayer) {
-						next[j] = { ...player, alive: false }
+						enemyHitUpdates.set(j, { ...player, alive: false })
 					}
 				}
 			}
+			// Apply enemy hit updates
+			if (enemyHitUpdates.size > 0) {
+				next = next.map((s, i) => enemyHitUpdates.get(i) ?? s)
+			}
 
 			// Spawn new enemies when one is killed (start with 1, spawn 2 when killed)
+			// But cap total enemies at MAX_ENEMIES
 			const deadEnemies = next.filter(s => !s.isPlayer && !s.alive)
 
 			if (deadEnemies.length > 0) {
-				// Remove dead enemies and spawn 2 new ones for each killed
+				// Remove dead enemies and spawn 2 new ones for each killed (up to cap)
 				next = next.filter(s => s.isPlayer || s.alive)
+				const currentEnemyCount = next.filter(s => !s.isPlayer).length
 				const playerSnakeForSpawn = next.find(s => s.isPlayer)
 				const playerBody = playerSnakeForSpawn?.body ?? []
-				for (let i = 0; i < deadEnemies.length * 2; i++) {
+				const enemiesToSpawn = Math.min(deadEnemies.length * 2, MAX_ENEMIES - currentEnemyCount)
+				for (let i = 0; i < enemiesToSpawn; i++) {
 					next.push(createEnemy(nextIdRef.current, playerBody))
 				}
 			}
@@ -613,8 +676,7 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 
 			return next
 		})
-	// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [tick, running, foods, cols, rows, onEnd])
+	}, [tick, running, foods, onEnd, setScore, createFood, createEnemy])
 
 	useEffect(() => {
 		const canvas = canvasRef.current
@@ -622,10 +684,10 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 		const ctx = canvas.getContext('2d')!
 		ctx.clearRect(0, 0, canvas.width, canvas.height)
 		ctx.fillStyle = 'rgba(255,255,255,0.04)'
-		for (let x = 0; x < cols; x++) {
-			for (let y = 0; y < rows; y++) {
+		for (let x = 0; x < COLS; x++) {
+			for (let y = 0; y < ROWS; y++) {
 				if ((x + y) % 2 === 0) {
-					ctx.fillRect(x * gridSize, y * gridSize, gridSize, gridSize)
+					ctx.fillRect(x * GRID_SIZE, y * GRID_SIZE, GRID_SIZE, GRID_SIZE)
 				}
 			}
 		}
@@ -633,16 +695,16 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 		// draw all food blocks
 		ctx.fillStyle = '#ffcc00'
 		for (const f of foods) {
-			ctx.fillRect(f.x * gridSize, f.y * gridSize, gridSize, gridSize)
+			ctx.fillRect(f.x * GRID_SIZE, f.y * GRID_SIZE, GRID_SIZE, GRID_SIZE)
 		}
 
 		// draw snakes with styles
 		snakes.forEach(s => {
 			ctx.globalAlpha = s.alive ? 1 : 0.3
 			s.body.forEach((p, idx) => {
-				const size = gridSize - Math.max(0, idx - 1)
-				const x = p.x * gridSize + (gridSize - size) / 2
-				const y = p.y * gridSize + (gridSize - size) / 2
+				const size = GRID_SIZE - Math.max(0, idx - 1)
+				const x = p.x * GRID_SIZE + (GRID_SIZE - size) / 2
+				const y = p.y * GRID_SIZE + (GRID_SIZE - size) / 2
 				if (type === 'neon' && s.isPlayer) {
 					ctx.shadowBlur = 16
 					ctx.shadowColor = color
@@ -669,9 +731,9 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 			ctx.globalAlpha = 0.6
 			ctx.beginPath()
 			ctx.arc(
-				touchTarget.x * gridSize + gridSize / 2,
-				touchTarget.y * gridSize + gridSize / 2,
-				gridSize / 2 + 4,
+				touchTarget.x * GRID_SIZE + GRID_SIZE / 2,
+				touchTarget.y * GRID_SIZE + GRID_SIZE / 2,
+				GRID_SIZE / 2 + 4,
 				0,
 				Math.PI * 2
 			)
@@ -687,7 +749,7 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 
 	return (
 		<div className="mt-8">
-			<canvas ref={canvasRef} width={cols * gridSize} height={rows * gridSize} className="rounded-xl border border-white/10 bg-black/40 w-full h-auto max-w-full" />
+			<canvas ref={canvasRef} width={COLS * GRID_SIZE} height={ROWS * GRID_SIZE} className="rounded-xl border border-white/10 bg-black/40 w-full h-auto max-w-full" />
 		</div>
 	)
 }
