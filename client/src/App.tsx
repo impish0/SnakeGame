@@ -12,12 +12,14 @@ type User = {
 
 // Game constants
 const GRID_SIZE = 20
-const COLS = 32
-const ROWS = 24
-const FOOD_COUNT = 5
-const MAX_ENEMIES = 10
+const WORLD_COLS = 100 // Large scrollable world
+const WORLD_ROWS = 100
+const VIEWPORT_COLS = 32 // What fits on screen
+const VIEWPORT_ROWS = 24
+const FOOD_COUNT = 25 // More food for larger world
+const MAX_ENEMIES = 15
 const ENEMY_AI_FOOD_CHASE_CHANCE = 0.7
-const SPAWN_SAFE_DISTANCE = 3
+const SPAWN_SAFE_DISTANCE = 5
 const SPAWN_MAX_ATTEMPTS = 50
 const ENEMY_COLORS = ['#ff6b6b', '#7c3aed', '#00eaff', '#ffe600', '#ff1aff']
 
@@ -248,10 +250,14 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 		})
 	}, [])
 
+	// Camera position (top-left corner of viewport in world coordinates)
+	const [camera, setCamera] = useState({ x: 0, y: 0 })
+
 	const nextIdRef = useRef(1)
 
+	// Player starts in center of world
 	const initialPlayer: Snake = useMemo(() => ({
-		body: [ { x: 8, y: 12 } ],
+		body: [ { x: Math.floor(WORLD_COLS / 2), y: Math.floor(WORLD_ROWS / 2) } ],
 		dir: { x: 1, y: 0 },
 		alive: true,
 		color: color,
@@ -266,8 +272,8 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 		let x: number
 		let y: number
 		do {
-			x = Math.floor(Math.random() * COLS)
-			y = Math.floor(Math.random() * ROWS)
+			x = Math.floor(Math.random() * WORLD_COLS)
+			y = Math.floor(Math.random() * WORLD_ROWS)
 			attempts++
 		} while (
 			attempts < SPAWN_MAX_ATTEMPTS &&
@@ -284,8 +290,8 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 		let spawnY: number
 		let attempts = 0
 		do {
-			spawnX = Math.floor(Math.random() * COLS)
-			spawnY = Math.floor(Math.random() * ROWS)
+			spawnX = Math.floor(Math.random() * WORLD_COLS)
+			spawnY = Math.floor(Math.random() * WORLD_ROWS)
 			attempts++
 		} while (
 			attempts < SPAWN_MAX_ATTEMPTS &&
@@ -311,9 +317,9 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 			return [initialPlayer]
 		}
 		initializedRef.current = true
-		// Start with exactly 1 enemy
+		// Start with exactly 1 enemy somewhere in the world
 		const enemy: Snake = {
-			body: [ { x: 22, y: 10 } ],
+			body: [ { x: Math.floor(WORLD_COLS / 2) + 15, y: Math.floor(WORLD_ROWS / 2) } ],
 			dir: { x: -1, y: 0 },
 			alive: true,
 			color: ENEMY_COLORS[0],
@@ -324,17 +330,19 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 		return [initialPlayer, enemy]
 	})
 
-	// Initialize foods avoiding initial snake positions
+	// Initialize foods spread across the world
 	const [foods, setFoods] = useState<Point[]>(() => {
-		const initialSnakeBodies = [{ x: 8, y: 12 }, { x: 22, y: 10 }]
+		const playerStart = { x: Math.floor(WORLD_COLS / 2), y: Math.floor(WORLD_ROWS / 2) }
+		const enemyStart = { x: Math.floor(WORLD_COLS / 2) + 15, y: Math.floor(WORLD_ROWS / 2) }
+		const initialSnakeBodies = [playerStart, enemyStart]
 		const initialFoods: Point[] = []
 		for (let i = 0; i < FOOD_COUNT; i++) {
 			let x: number
 			let y: number
 			let attempts = 0
 			do {
-				x = Math.floor(Math.random() * COLS)
-				y = Math.floor(Math.random() * ROWS)
+				x = Math.floor(Math.random() * WORLD_COLS)
+				y = Math.floor(Math.random() * WORLD_ROWS)
 				attempts++
 			} while (
 				attempts < SPAWN_MAX_ATTEMPTS &&
@@ -356,7 +364,7 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 		}
 	}, [endKey, onEnd])
 
-	// Touch: finger-following control - snake moves toward finger position
+	// Touch: finger-following control - snake moves toward finger position (relative to viewport)
 	const touchTargetRef = useRef<{ x: number; y: number } | null>(null)
 	const [touchTarget, setTouchTarget] = useState<{ x: number; y: number } | null>(null)
 
@@ -368,9 +376,13 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 			const rect = canvas.getBoundingClientRect()
 			const scaleX = canvas.width / rect.width
 			const scaleY = canvas.height / rect.height
-			const x = Math.floor(((clientX - rect.left) * scaleX) / GRID_SIZE)
-			const y = Math.floor(((clientY - rect.top) * scaleY) / GRID_SIZE)
-			return { x: Math.max(0, Math.min(COLS - 1, x)), y: Math.max(0, Math.min(ROWS - 1, y)) }
+			// Convert screen position to world position
+			const viewX = Math.floor(((clientX - rect.left) * scaleX) / GRID_SIZE)
+			const viewY = Math.floor(((clientY - rect.top) * scaleY) / GRID_SIZE)
+			// Add camera offset to get world coordinates
+			const worldX = viewX + camera.x
+			const worldY = viewY + camera.y
+			return { x: Math.max(0, Math.min(WORLD_COLS - 1, worldX)), y: Math.max(0, Math.min(WORLD_ROWS - 1, worldY)) }
 		}
 
 		const handleTouch = (e: TouchEvent) => {
@@ -398,7 +410,7 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 			canvas.removeEventListener('touchend', handleTouchEnd)
 			canvas.removeEventListener('touchcancel', handleTouchEnd)
 		}
-	}, [])
+	}, [camera])
 
 	useEffect(() => {
 		const handler = (e: KeyboardEvent | CustomEvent) => {
@@ -484,6 +496,7 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 			})
 
 			// Move snakes (enemies move slower based on size)
+			// No wrap-around - snakes stop at world boundaries
 			next = next.map(s => {
 				if (!s.alive) return s
 				// Enemies skip ticks based on their size
@@ -491,7 +504,15 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 					const interval = getEnemyTickInterval(s.size)
 					if (tick % interval !== 0) return s
 				}
-				const head = { x: (s.body[0].x + s.dir.x + COLS) % COLS, y: (s.body[0].y + s.dir.y + ROWS) % ROWS }
+				const oldHead = s.body[0]
+				let newX = oldHead.x + s.dir.x
+				let newY = oldHead.y + s.dir.y
+
+				// Clamp to world boundaries (no wrap-around)
+				newX = Math.max(0, Math.min(WORLD_COLS - 1, newX))
+				newY = Math.max(0, Math.min(WORLD_ROWS - 1, newY))
+
+				const head = { x: newX, y: newY }
 				const newBody = [head, ...s.body].slice(0, s.size)
 				return { ...s, body: newBody }
 			})
@@ -620,7 +641,7 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 				setScore(v => v + scoreFromEating)
 			}
 
-			// Enemy head hitting player kills player (enemy doesn't die from this)
+			// Enemy head hitting player kills player ONLY if enemy is larger
 			// But only if the enemy still has a head (wasn't just eaten)
 			const enemyHitUpdates: Map<number, Snake> = new Map()
 			for (let i = 0; i < next.length; i++) {
@@ -633,6 +654,9 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 				for (let j = 0; j < next.length; j++) {
 					const player = next[j]
 					if (!player.isPlayer || !player.alive) continue
+
+					// Enemy can only kill player if enemy is larger
+					if (enemy.size <= player.size) continue
 
 					// Check if enemy head hits player body (excluding head-to-head which player wins)
 					const hitPlayer = player.body.some((p, idx) => {
@@ -676,6 +700,15 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 				setTimeout(() => onEnd(scoreRef.current), 300)
 			}
 
+			// Update camera to follow player
+			if (playerSnake?.alive) {
+				const playerHead = playerSnake.body[0]
+				// Center camera on player, but clamp to world boundaries
+				const targetCamX = Math.max(0, Math.min(WORLD_COLS - VIEWPORT_COLS, playerHead.x - Math.floor(VIEWPORT_COLS / 2)))
+				const targetCamY = Math.max(0, Math.min(WORLD_ROWS - VIEWPORT_ROWS, playerHead.y - Math.floor(VIEWPORT_ROWS / 2)))
+				setCamera({ x: targetCamX, y: targetCamY })
+			}
+
 			return next
 		})
 	}, [tick, running, foods, onEnd, setScore, createFood, createEnemy])
@@ -685,73 +718,169 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 		if (!canvas) return
 		const ctx = canvas.getContext('2d')!
 		ctx.clearRect(0, 0, canvas.width, canvas.height)
+
+		// Draw checkerboard background (only visible portion)
 		ctx.fillStyle = 'rgba(255,255,255,0.04)'
-		for (let x = 0; x < COLS; x++) {
-			for (let y = 0; y < ROWS; y++) {
-				if ((x + y) % 2 === 0) {
-					ctx.fillRect(x * GRID_SIZE, y * GRID_SIZE, GRID_SIZE, GRID_SIZE)
+		for (let vx = 0; vx < VIEWPORT_COLS; vx++) {
+			for (let vy = 0; vy < VIEWPORT_ROWS; vy++) {
+				const worldX = vx + camera.x
+				const worldY = vy + camera.y
+				if ((worldX + worldY) % 2 === 0) {
+					ctx.fillRect(vx * GRID_SIZE, vy * GRID_SIZE, GRID_SIZE, GRID_SIZE)
 				}
 			}
 		}
 
-		// draw all food blocks
-		ctx.fillStyle = '#ffcc00'
-		for (const f of foods) {
-			ctx.fillRect(f.x * GRID_SIZE, f.y * GRID_SIZE, GRID_SIZE, GRID_SIZE)
+		// Draw world boundary indicator
+		ctx.strokeStyle = 'rgba(255, 100, 100, 0.5)'
+		ctx.lineWidth = 3
+		// Left edge
+		if (camera.x === 0) {
+			ctx.beginPath()
+			ctx.moveTo(0, 0)
+			ctx.lineTo(0, VIEWPORT_ROWS * GRID_SIZE)
+			ctx.stroke()
+		}
+		// Right edge
+		if (camera.x >= WORLD_COLS - VIEWPORT_COLS) {
+			ctx.beginPath()
+			ctx.moveTo(VIEWPORT_COLS * GRID_SIZE, 0)
+			ctx.lineTo(VIEWPORT_COLS * GRID_SIZE, VIEWPORT_ROWS * GRID_SIZE)
+			ctx.stroke()
+		}
+		// Top edge
+		if (camera.y === 0) {
+			ctx.beginPath()
+			ctx.moveTo(0, 0)
+			ctx.lineTo(VIEWPORT_COLS * GRID_SIZE, 0)
+			ctx.stroke()
+		}
+		// Bottom edge
+		if (camera.y >= WORLD_ROWS - VIEWPORT_ROWS) {
+			ctx.beginPath()
+			ctx.moveTo(0, VIEWPORT_ROWS * GRID_SIZE)
+			ctx.lineTo(VIEWPORT_COLS * GRID_SIZE, VIEWPORT_ROWS * GRID_SIZE)
+			ctx.stroke()
 		}
 
-		// draw snakes with styles
+		// Draw all food blocks (only those in viewport)
+		ctx.fillStyle = '#ffcc00'
+		for (const f of foods) {
+			const screenX = (f.x - camera.x) * GRID_SIZE
+			const screenY = (f.y - camera.y) * GRID_SIZE
+			// Only draw if in viewport
+			if (screenX >= -GRID_SIZE && screenX < VIEWPORT_COLS * GRID_SIZE + GRID_SIZE &&
+				screenY >= -GRID_SIZE && screenY < VIEWPORT_ROWS * GRID_SIZE + GRID_SIZE) {
+				ctx.fillRect(screenX, screenY, GRID_SIZE, GRID_SIZE)
+			}
+		}
+
+		// Draw snakes with styles (only visible portions)
 		snakes.forEach(s => {
 			ctx.globalAlpha = s.alive ? 1 : 0.3
 			s.body.forEach((p, idx) => {
-				const size = GRID_SIZE - Math.max(0, idx - 1)
-				const x = p.x * GRID_SIZE + (GRID_SIZE - size) / 2
-				const y = p.y * GRID_SIZE + (GRID_SIZE - size) / 2
-				if (type === 'neon' && s.isPlayer) {
-					ctx.shadowBlur = 16
-					ctx.shadowColor = color
-					ctx.fillStyle = color
-					ctx.fillRect(x, y, size, size)
-					ctx.shadowBlur = 0
-				} else if (type === 'stripe' && s.isPlayer) {
-					ctx.fillStyle = idx % 2 === 0 ? color : 'white'
-					ctx.globalAlpha = idx % 2 === 0 ? 1 : 0.5
-					ctx.fillRect(x, y, size, size)
-					ctx.globalAlpha = s.alive ? 1 : 0.3
-				} else {
-					ctx.fillStyle = s.color
-					ctx.fillRect(x, y, size, size)
+				const screenX = (p.x - camera.x) * GRID_SIZE
+				const screenY = (p.y - camera.y) * GRID_SIZE
+				// Only draw if in viewport
+				if (screenX >= -GRID_SIZE && screenX < VIEWPORT_COLS * GRID_SIZE + GRID_SIZE &&
+					screenY >= -GRID_SIZE && screenY < VIEWPORT_ROWS * GRID_SIZE + GRID_SIZE) {
+					const size = GRID_SIZE - Math.max(0, idx - 1)
+					const x = screenX + (GRID_SIZE - size) / 2
+					const y = screenY + (GRID_SIZE - size) / 2
+					if (type === 'neon' && s.isPlayer) {
+						ctx.shadowBlur = 16
+						ctx.shadowColor = color
+						ctx.fillStyle = color
+						ctx.fillRect(x, y, size, size)
+						ctx.shadowBlur = 0
+					} else if (type === 'stripe' && s.isPlayer) {
+						ctx.fillStyle = idx % 2 === 0 ? color : 'white'
+						ctx.globalAlpha = idx % 2 === 0 ? 1 : 0.5
+						ctx.fillRect(x, y, size, size)
+						ctx.globalAlpha = s.alive ? 1 : 0.3
+					} else {
+						ctx.fillStyle = s.color
+						ctx.fillRect(x, y, size, size)
+					}
 				}
 			})
 			ctx.globalAlpha = 1
 		})
 
-		// draw touch target indicator
+		// Draw touch target indicator (in world coords, converted to screen)
 		if (touchTarget) {
-			ctx.strokeStyle = color
-			ctx.lineWidth = 2
-			ctx.globalAlpha = 0.6
-			ctx.beginPath()
-			ctx.arc(
-				touchTarget.x * GRID_SIZE + GRID_SIZE / 2,
-				touchTarget.y * GRID_SIZE + GRID_SIZE / 2,
-				GRID_SIZE / 2 + 4,
-				0,
-				Math.PI * 2
-			)
-			ctx.stroke()
-			ctx.globalAlpha = 1
+			const screenX = (touchTarget.x - camera.x) * GRID_SIZE
+			const screenY = (touchTarget.y - camera.y) * GRID_SIZE
+			if (screenX >= -GRID_SIZE && screenX < VIEWPORT_COLS * GRID_SIZE + GRID_SIZE &&
+				screenY >= -GRID_SIZE && screenY < VIEWPORT_ROWS * GRID_SIZE + GRID_SIZE) {
+				ctx.strokeStyle = color
+				ctx.lineWidth = 2
+				ctx.globalAlpha = 0.6
+				ctx.beginPath()
+				ctx.arc(
+					screenX + GRID_SIZE / 2,
+					screenY + GRID_SIZE / 2,
+					GRID_SIZE / 2 + 4,
+					0,
+					Math.PI * 2
+				)
+				ctx.stroke()
+				ctx.globalAlpha = 1
+			}
 		}
 
-		// score HUD
+		// Score HUD
 		ctx.fillStyle = 'white'
 		ctx.font = 'bold 16px sans-serif'
-		ctx.fillText(`Score: ${score}` , 10, 18)
-	}, [snakes, foods, score, type, color, touchTarget])
+		ctx.fillText(`Score: ${score}`, 10, 18)
+
+		// Show player size in HUD
+		const player = snakes.find(s => s.isPlayer)
+		if (player) {
+			ctx.fillText(`Size: ${player.size}`, 10, 38)
+		}
+
+		// Mini-map in corner
+		const mapSize = 80
+		const mapX = VIEWPORT_COLS * GRID_SIZE - mapSize - 10
+		const mapY = 10
+		ctx.fillStyle = 'rgba(0, 0, 0, 0.5)'
+		ctx.fillRect(mapX, mapY, mapSize, mapSize)
+		ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)'
+		ctx.strokeRect(mapX, mapY, mapSize, mapSize)
+
+		// Draw food on mini-map
+		ctx.fillStyle = '#ffcc00'
+		for (const f of foods) {
+			const mx = mapX + (f.x / WORLD_COLS) * mapSize
+			const my = mapY + (f.y / WORLD_ROWS) * mapSize
+			ctx.fillRect(mx - 1, my - 1, 2, 2)
+		}
+
+		// Draw snakes on mini-map
+		snakes.forEach(s => {
+			if (!s.alive) return
+			ctx.fillStyle = s.isPlayer ? color : s.color
+			const head = s.body[0]
+			const mx = mapX + (head.x / WORLD_COLS) * mapSize
+			const my = mapY + (head.y / WORLD_ROWS) * mapSize
+			ctx.fillRect(mx - 2, my - 2, 4, 4)
+		})
+
+		// Draw viewport rectangle on mini-map
+		ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)'
+		ctx.lineWidth = 1
+		const viewRectX = mapX + (camera.x / WORLD_COLS) * mapSize
+		const viewRectY = mapY + (camera.y / WORLD_ROWS) * mapSize
+		const viewRectW = (VIEWPORT_COLS / WORLD_COLS) * mapSize
+		const viewRectH = (VIEWPORT_ROWS / WORLD_ROWS) * mapSize
+		ctx.strokeRect(viewRectX, viewRectY, viewRectW, viewRectH)
+
+	}, [snakes, foods, score, type, color, touchTarget, camera])
 
 	return (
 		<div className="mt-8">
-			<canvas ref={canvasRef} width={COLS * GRID_SIZE} height={ROWS * GRID_SIZE} className="rounded-xl border border-white/10 bg-black/40 w-full h-auto max-w-full" />
+			<canvas ref={canvasRef} width={VIEWPORT_COLS * GRID_SIZE} height={VIEWPORT_ROWS * GRID_SIZE} className="rounded-xl border border-white/10 bg-black/40 w-full h-auto max-w-full" />
 		</div>
 	)
 }
