@@ -403,16 +403,18 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 	useEffect(() => {
 		const handler = (e: KeyboardEvent | CustomEvent) => {
 			if (!running) return
+			// Helper to check if new direction is opposite of current (would reverse)
+			const isReverse = (current: Point, next: Point) => current.x === -next.x && current.y === -next.y
 			// Keyboard
 			if (e instanceof KeyboardEvent) {
-				if (e.key === 'ArrowUp') setSnakes(prev => prev.map(s => s.isPlayer ? { ...s, dir: { x: 0, y: -1 } } : s))
-				if (e.key === 'ArrowDown') setSnakes(prev => prev.map(s => s.isPlayer ? { ...s, dir: { x: 0, y: 1 } } : s))
-				if (e.key === 'ArrowLeft') setSnakes(prev => prev.map(s => s.isPlayer ? { ...s, dir: { x: -1, y: 0 } } : s))
-				if (e.key === 'ArrowRight') setSnakes(prev => prev.map(s => s.isPlayer ? { ...s, dir: { x: 1, y: 0 } } : s))
+				if (e.key === 'ArrowUp') setSnakes(prev => prev.map(s => s.isPlayer && !isReverse(s.dir, { x: 0, y: -1 }) ? { ...s, dir: { x: 0, y: -1 } } : s))
+				if (e.key === 'ArrowDown') setSnakes(prev => prev.map(s => s.isPlayer && !isReverse(s.dir, { x: 0, y: 1 }) ? { ...s, dir: { x: 0, y: 1 } } : s))
+				if (e.key === 'ArrowLeft') setSnakes(prev => prev.map(s => s.isPlayer && !isReverse(s.dir, { x: -1, y: 0 }) ? { ...s, dir: { x: -1, y: 0 } } : s))
+				if (e.key === 'ArrowRight') setSnakes(prev => prev.map(s => s.isPlayer && !isReverse(s.dir, { x: 1, y: 0 }) ? { ...s, dir: { x: 1, y: 0 } } : s))
 			} else {
 				const detail = (e as CustomEvent<{ x: number; y: number }>).detail
 				if (detail && typeof detail.x === 'number' && typeof detail.y === 'number') {
-					setSnakes(prev => prev.map(s => s.isPlayer ? { ...s, dir: { x: detail.x, y: detail.y } } : s))
+					setSnakes(prev => prev.map(s => s.isPlayer && !isReverse(s.dir, detail) ? { ...s, dir: { x: detail.x, y: detail.y } } : s))
 				}
 			}
 		}
