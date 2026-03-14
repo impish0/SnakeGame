@@ -12,16 +12,38 @@ type User = {
 
 // Game constants
 const GRID_SIZE = 20
-const WORLD_COLS = 100 // Large scrollable world
-const WORLD_ROWS = 100
-const VIEWPORT_COLS = 32 // What fits on screen
-const VIEWPORT_ROWS = 24
-const FOOD_COUNT = 25 // More food for larger world
-const MAX_ENEMIES = 15
+const WORLD_COLS = 150 // Large scrollable world
+const WORLD_ROWS = 150
+const FOOD_COUNT = 80 // Lots of food spread around
+const MAX_ENEMIES = 25 // More enemies for larger world
+const INITIAL_ENEMIES = 5 // Start with more enemies
 const ENEMY_AI_FOOD_CHASE_CHANCE = 0.7
-const SPAWN_SAFE_DISTANCE = 5
+const SPAWN_SAFE_DISTANCE = 8
 const SPAWN_MAX_ATTEMPTS = 50
 const ENEMY_COLORS = ['#ff6b6b', '#7c3aed', '#00eaff', '#ffe600', '#ff1aff']
+
+// Hook to get dynamic viewport size based on window
+function useViewportSize() {
+	const [size, setSize] = useState(() => {
+		if (typeof window === 'undefined') return { cols: 32, rows: 24 }
+		// Calculate how many grid cells fit in the window (leave some margin)
+		const cols = Math.floor((window.innerWidth - 40) / GRID_SIZE)
+		const rows = Math.floor((window.innerHeight - 120) / GRID_SIZE) // Extra space for header
+		return { cols: Math.min(cols, WORLD_COLS), rows: Math.min(rows, WORLD_ROWS) }
+	})
+
+	useEffect(() => {
+		const handleResize = () => {
+			const cols = Math.floor((window.innerWidth - 40) / GRID_SIZE)
+			const rows = Math.floor((window.innerHeight - 120) / GRID_SIZE)
+			setSize({ cols: Math.min(cols, WORLD_COLS), rows: Math.min(rows, WORLD_ROWS) })
+		}
+		window.addEventListener('resize', handleResize)
+		return () => window.removeEventListener('resize', handleResize)
+	}, [])
+
+	return size
+}
 
 const SNAKE_TYPES: { id: SnakeType; label: string }[] = [
 	{ id: 'classic', label: 'Classic' },
@@ -191,14 +213,21 @@ export default function App() {
 				)}
 
 				{gameState === 'playing' && (
-					<>
-						<div className="mt-6 flex items-center justify-between">
-							{isTouch && <span className="text-sm opacity-60">Touch and drag to guide your snake</span>}
-							{!isTouch && <span className="text-sm opacity-60">Use arrow keys to move</span>}
+					<div className="fixed inset-0 bg-gradient-to-br from-black via-indigo-950 to-indigo-900 flex flex-col z-50">
+						<div className="flex items-center justify-between p-3 bg-black/30">
+							<div className="flex items-center gap-4">
+								<h1 className="text-xl font-bold">
+									<span className="text-lime-400">S</span>erpent<span className="text-fuchsia-400">A</span>rena
+								</h1>
+								{isTouch && <span className="text-sm opacity-60">Touch to guide</span>}
+								{!isTouch && <span className="text-sm opacity-60">Arrow keys to move</span>}
+							</div>
 							<button className="px-3 py-1 rounded border border-white/10 bg-white/10 hover:bg-white/20" onClick={() => setEndKey(k => k + 1)}>End Game</button>
 						</div>
-						<GameCanvas color={snakeColor} type={snakeType} onEnd={(finalScore) => { setScore(finalScore); setGameState('gameover'); }} endKey={endKey} />
-					</>
+						<div className="flex-1 flex items-center justify-center p-2 overflow-hidden">
+							<GameCanvas color={snakeColor} type={snakeType} onEnd={(finalScore) => { setScore(finalScore); setGameState('gameover'); }} endKey={endKey} />
+						</div>
+					</div>
 				)}
 
 				{gameState === 'gameover' && (
@@ -249,6 +278,11 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 			return next
 		})
 	}, [])
+
+	// Dynamic viewport size based on window
+	const viewport = useViewportSize()
+	const VIEWPORT_COLS = viewport.cols
+	const VIEWPORT_ROWS = viewport.rows
 
 	// Camera position (top-left corner of viewport in world coordinates)
 	const [camera, setCamera] = useState({ x: 0, y: 0 })
@@ -312,22 +346,31 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 	// Use a ref to track if we've initialized to prevent double-init in Strict Mode
 	const initializedRef = useRef(false)
 	const [snakes, setSnakes] = useState<Snake[]>(() => {
-		// Only create initial enemy once
+		// Only create initial enemies once
 		if (initializedRef.current) {
 			return [initialPlayer]
 		}
 		initializedRef.current = true
-		// Start with exactly 1 enemy somewhere in the world
-		const enemy: Snake = {
-			body: [ { x: Math.floor(WORLD_COLS / 2) + 15, y: Math.floor(WORLD_ROWS / 2) } ],
-			dir: { x: -1, y: 0 },
-			alive: true,
-			color: ENEMY_COLORS[0],
-			isPlayer: false,
-			size: 3,
-			id: nextIdRef.current++,
+		// Start with INITIAL_ENEMIES spread around the world
+		const enemies: Snake[] = []
+		const playerPos = { x: Math.floor(WORLD_COLS / 2), y: Math.floor(WORLD_ROWS / 2) }
+		for (let i = 0; i < INITIAL_ENEMIES; i++) {
+			// Spread enemies around the map
+			const angle = (i / INITIAL_ENEMIES) * Math.PI * 2
+			const distance = 20 + Math.random() * 30
+			const spawnX = Math.floor(playerPos.x + Math.cos(angle) * distance)
+			const spawnY = Math.floor(playerPos.y + Math.sin(angle) * distance)
+			enemies.push({
+				body: [ { x: Math.max(0, Math.min(WORLD_COLS - 1, spawnX)), y: Math.max(0, Math.min(WORLD_ROWS - 1, spawnY)) } ],
+				dir: { x: i % 2 === 0 ? -1 : 1, y: 0 },
+				alive: true,
+				color: ENEMY_COLORS[i % ENEMY_COLORS.length],
+				isPlayer: false,
+				size: 3,
+				id: nextIdRef.current++,
+			})
 		}
-		return [initialPlayer, enemy]
+		return [initialPlayer, ...enemies]
 	})
 
 	// Initialize foods spread across the world
@@ -711,7 +754,7 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 
 			return next
 		})
-	}, [tick, running, foods, onEnd, setScore, createFood, createEnemy])
+	}, [tick, running, foods, onEnd, setScore, createFood, createEnemy, VIEWPORT_COLS, VIEWPORT_ROWS])
 
 	useEffect(() => {
 		const canvas = canvasRef.current
@@ -763,7 +806,7 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 			ctx.stroke()
 		}
 
-		// Draw all food blocks (only those in viewport)
+		// Draw all food as circles (only those in viewport)
 		ctx.fillStyle = '#ffcc00'
 		for (const f of foods) {
 			const screenX = (f.x - camera.x) * GRID_SIZE
@@ -771,11 +814,13 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 			// Only draw if in viewport
 			if (screenX >= -GRID_SIZE && screenX < VIEWPORT_COLS * GRID_SIZE + GRID_SIZE &&
 				screenY >= -GRID_SIZE && screenY < VIEWPORT_ROWS * GRID_SIZE + GRID_SIZE) {
-				ctx.fillRect(screenX, screenY, GRID_SIZE, GRID_SIZE)
+				ctx.beginPath()
+				ctx.arc(screenX + GRID_SIZE / 2, screenY + GRID_SIZE / 2, GRID_SIZE / 2 - 2, 0, Math.PI * 2)
+				ctx.fill()
 			}
 		}
 
-		// Draw snakes with styles (only visible portions)
+		// Draw snakes with styles as circles (only visible portions)
 		snakes.forEach(s => {
 			ctx.globalAlpha = s.alive ? 1 : 0.3
 			s.body.forEach((p, idx) => {
@@ -784,23 +829,30 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 				// Only draw if in viewport
 				if (screenX >= -GRID_SIZE && screenX < VIEWPORT_COLS * GRID_SIZE + GRID_SIZE &&
 					screenY >= -GRID_SIZE && screenY < VIEWPORT_ROWS * GRID_SIZE + GRID_SIZE) {
-					const size = GRID_SIZE - Math.max(0, idx - 1)
-					const x = screenX + (GRID_SIZE - size) / 2
-					const y = screenY + (GRID_SIZE - size) / 2
+					// Segments get slightly smaller toward the tail
+					const radius = (GRID_SIZE / 2) - Math.min(idx * 0.3, 4)
+					const centerX = screenX + GRID_SIZE / 2
+					const centerY = screenY + GRID_SIZE / 2
 					if (type === 'neon' && s.isPlayer) {
 						ctx.shadowBlur = 16
 						ctx.shadowColor = color
 						ctx.fillStyle = color
-						ctx.fillRect(x, y, size, size)
+						ctx.beginPath()
+						ctx.arc(centerX, centerY, radius, 0, Math.PI * 2)
+						ctx.fill()
 						ctx.shadowBlur = 0
 					} else if (type === 'stripe' && s.isPlayer) {
 						ctx.fillStyle = idx % 2 === 0 ? color : 'white'
 						ctx.globalAlpha = idx % 2 === 0 ? 1 : 0.5
-						ctx.fillRect(x, y, size, size)
+						ctx.beginPath()
+						ctx.arc(centerX, centerY, radius, 0, Math.PI * 2)
+						ctx.fill()
 						ctx.globalAlpha = s.alive ? 1 : 0.3
 					} else {
 						ctx.fillStyle = s.color
-						ctx.fillRect(x, y, size, size)
+						ctx.beginPath()
+						ctx.arc(centerX, centerY, radius, 0, Math.PI * 2)
+						ctx.fill()
 					}
 				}
 			})
@@ -876,11 +928,9 @@ function GameCanvas({ color, type, onEnd, endKey }: { color: string; type: Snake
 		const viewRectH = (VIEWPORT_ROWS / WORLD_ROWS) * mapSize
 		ctx.strokeRect(viewRectX, viewRectY, viewRectW, viewRectH)
 
-	}, [snakes, foods, score, type, color, touchTarget, camera])
+	}, [snakes, foods, score, type, color, touchTarget, camera, VIEWPORT_COLS, VIEWPORT_ROWS])
 
 	return (
-		<div className="mt-8">
-			<canvas ref={canvasRef} width={VIEWPORT_COLS * GRID_SIZE} height={VIEWPORT_ROWS * GRID_SIZE} className="rounded-xl border border-white/10 bg-black/40 w-full h-auto max-w-full" />
-		</div>
+		<canvas ref={canvasRef} width={VIEWPORT_COLS * GRID_SIZE} height={VIEWPORT_ROWS * GRID_SIZE} className="rounded-xl border border-white/10 bg-black/40 block mx-auto" />
 	)
 }
